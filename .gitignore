@@ -1,0 +1,9 @@
+PROGRESS.md
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+*.db
+.env
+*.egg-info/

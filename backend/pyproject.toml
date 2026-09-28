@@ -1,0 +1,27 @@
+[project]
+name = "uniparent"
+version = "0.1.0"
+description = "Parent-friendly WiFi on/off for kids' devices on a UniFi network"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141",
+    "uvicorn>=0.54",
+    "httpx>=0.28",
+    "argon2-cffi>=25.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9"]
+
+[project.scripts]
+uniparent = "uniparent.cli:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["uniparent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
