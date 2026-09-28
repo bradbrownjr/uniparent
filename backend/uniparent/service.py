@@ -63,8 +63,15 @@ class Service:
 
     # ---- enforcement ---------------------------------------------------------------------------
 
-    async def reconcile(self, now: int | None = None) -> None:
-        """Make the controller's block list match what the rules say, and tidy expired timers."""
+    async def reconcile(self, now: int | None = None, force: set[str] | None = None) -> None:
+        """Push rule changes to the controller, and tidy expired timers.
+
+        Edge-triggered: a device is only blocked/unblocked when what UniParent wants for it changes
+        (button press, schedule start/end, pause running out) — `devices.applied_off` remembers the last
+        thing we sent. Between changes, whatever someone sets in the UniFi app is left alone. MACs in
+        `force` (an explicit button press here) are pushed even if our intent didn't change.
+        """
+        force = force or set()
         async with self._lock:
             now = now or int(time.time())
             self._expire(now)
@@ -80,10 +87,19 @@ class Service:
             clients = await self.refresh_clients(max_age=0)
             if self.last_error:
                 return
+            applied = {d["mac"]: d["applied_off"] for d in self.db.q("SELECT mac, applied_off FROM devices")}
             for mac, st in devices.items():
                 c = clients.get(mac)
                 if c is None or c.wired:
                     continue  # unknown to the controller yet, or wired (no UniFi gateway to block it)
+                prev = applied.get(mac)
+                if mac not in force:
+                    if prev is not None and bool(prev) == st.off:
+                        continue  # nothing changed on our side; respect any edits made in the UniFi app
+                    if prev is None and not st.off:
+                        # Newly managed and should be on: don't undo a block someone set in the UniFi app.
+                        self.db.x("UPDATE devices SET applied_off=0 WHERE mac=?", (mac,))
+                        continue
                 try:
                     if st.off and not c.blocked:
                         await self.unifi.block(mac)
@@ -91,7 +107,8 @@ class Service:
                     elif not st.off and c.blocked:
                         await self.unifi.unblock(mac)
                         c.blocked = False
-                except UniFiError as e:
+                    self.db.x("UPDATE devices SET applied_off=? WHERE mac=?", (int(st.off), mac))
+                except UniFiError as e:  # not recorded as applied, so the next pass retries
                     self.last_error = str(e)
                     log.warning("could not update %s: %s", mac, e)
 
@@ -153,7 +170,8 @@ class Service:
         self.db.x("UPDATE devices SET override_until=NULL WHERE group_id=?", (gid,))
         self.db.log(user["display_name"], what, g["name"], user["id"])
         self._mark_seen(now)
-        await self.reconcile(now)
+        await self.reconcile(now, force={r["mac"] for r in self.db.q("SELECT mac FROM devices WHERE group_id=?",
+                                                                     (gid,))})
 
     async def set_device(self, mac: str, action: str, user: dict, until: int | None = None) -> None:
         d = self.db.one("SELECT * FROM devices WHERE mac=?", (mac,))
@@ -180,13 +198,13 @@ class Service:
             raise ValueError(action)
         self.db.log(user["display_name"], what, d["label"], user["id"])
         self._mark_seen(now)
-        await self.reconcile(now)
+        await self.reconcile(now, force={mac})
 
     async def unblock_all(self, actor: str, user_id: int | None = None) -> int:
         """Escape hatch: clear every off/pause and unblock every managed device on the controller."""
         async with self._lock:
             self.db.x("UPDATE groups SET manual_off=0, pause_until=NULL, override_until=NULL")
-            self.db.x("UPDATE devices SET manual_off=0, pause_until=NULL, override_until=NULL")
+            self.db.x("UPDATE devices SET manual_off=0, pause_until=NULL, override_until=NULL, applied_off=0")
             self.db.x("UPDATE schedules SET enabled=0")
             clients = await self.refresh_clients(max_age=0)
             n = 0

@@ -134,11 +134,51 @@ def test_bad_schedule_rejected(admin, kid):
     assert r.status_code == 422
 
 
-def test_reconcile_reapplies_if_unblocked_elsewhere(app, parent, kid, fake):
-    parent.post(f"/api/groups/{kid}/off", headers=H)
-    fake.c[KID_PHONE].blocked = False  # someone unblocked it in the UniFi app
+def test_unifi_app_changes_are_respected(app, parent, kid, fake):
     import asyncio
+    parent.post(f"/api/groups/{kid}/off", headers=H)
+    fake.c[KID_PHONE].blocked = False    # someone allowed it in the UniFi app
+    fake.c[KID_TABLET].blocked = False
     asyncio.run(app.state.svc.reconcile())
+    assert not fake.c[KID_PHONE].blocked, "the background loop must not undo UniFi app changes"
+    d = devs(parent)[KID_PHONE]
+    assert d["state"]["off"] and not d["blocked"]  # UI can say "allowed in the UniFi app"
+    # ...but pressing a button in UniParent is an explicit request and wins
+    parent.post(f"/api/devices/{KID_PHONE}/off", headers=H)
+    assert fake.c[KID_PHONE].blocked
+    parent.post(f"/api/groups/{kid}/off", headers=H)
+    assert fake.c[KID_TABLET].blocked
+
+
+def test_unifi_app_block_respected_while_on(app, parent, kid, fake):
+    import asyncio
+    fake.c[KID_PHONE].blocked = True     # blocked in the UniFi app while UniParent says on
+    asyncio.run(app.state.svc.reconcile())
+    assert fake.c[KID_PHONE].blocked
+
+
+def test_schedule_edges_still_apply(app, parent, kid, fake):
+    import asyncio
+    svc = app.state.svc
+    until = int(time.time()) + 600
+    parent.post(f"/api/groups/{kid}/pause", json={"until": until}, headers=H)
+    fake.c[KID_PHONE].blocked = False    # allowed in UniFi app mid-pause: left alone...
+    asyncio.run(svc.reconcile())
+    assert not fake.c[KID_PHONE].blocked
+    fake.c[KID_TABLET].blocked = True    # ...and when the pause ends, our unblock is sent
+    asyncio.run(svc.reconcile(until + 1))
+    assert not fake.c[KID_TABLET].blocked
+
+
+def test_new_device_added_to_off_group_is_blocked(admin, kid, fake):
+    admin.post(f"/api/groups/{kid}/off", headers=H)
+    admin.put(f"/api/admin/devices/{PLUG}", json={"label": "Riley's lamp", "group_id": kid}, headers=H)
+    assert fake.c[PLUG].blocked
+
+
+def test_forget_leaves_unifi_app_block(admin, kid, fake):
+    fake.c[KID_PHONE].blocked = True     # blocked in the UniFi app, not by us
+    admin.delete(f"/api/admin/devices/{KID_PHONE}", headers=H)
     assert fake.c[KID_PHONE].blocked
 
 

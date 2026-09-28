@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS devices (
     manual_off     INTEGER NOT NULL DEFAULT 0,
     pause_until    INTEGER,
     override_until INTEGER,           -- on until this time even while its group is off
+    applied_off    INTEGER,           -- last block state UniParent pushed (NULL = never); see Service.reconcile
     notes          TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS schedules (

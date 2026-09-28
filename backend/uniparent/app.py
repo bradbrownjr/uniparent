@@ -285,7 +285,7 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
             raise HTTPException(404)
         db.x("DELETE FROM devices WHERE mac=?", (mac,))
         c = (await svc.refresh_clients(max_age=0)).get(mac)
-        if c and c.blocked:  # we stop managing it, so don't leave it stranded offline
+        if c and c.blocked and d["applied_off"]:  # we blocked it and stop managing it: don't strand it offline
             await svc.unifi.unblock(mac)
         db.log(user["display_name"], "Stopped managing device", d["label"], user["id"])
         return {"ok": True}
