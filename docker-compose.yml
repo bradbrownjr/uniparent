@@ -1,0 +1,11 @@
+services:
+  uniparent:
+    build: .
+    image: uniparent:latest
+    container_name: uniparent
+    env_file: .env
+    ports:
+      - "8095:8095"
+    volumes:
+      - /mnt/user/appdata/uniparent:/data   # SQLite database; change for non-Unraid hosts
+    restart: unless-stopped

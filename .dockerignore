@@ -1,0 +1,11 @@
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.egg-info
+frontend/dist
+backend/tests
+docs
+.git
+PROGRESS.md
+*.db
+.env
