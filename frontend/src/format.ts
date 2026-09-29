@@ -65,7 +65,7 @@ export function stateLine(st: State): string {
     case 'manual': return 'WiFi is off'
     case 'pause': return `WiFi is paused${until}`
     case 'schedule': return `${st.detail || 'Scheduled'} — off${until}`
-    case 'group': return st.detail ? `${st.detail} — off${until}` : `Off with the group${until}`
+    case 'group': return st.detail ? `${st.detail} — off${until}` : `Off with the rest${until}`
     default: return 'WiFi is off'
   }
 }

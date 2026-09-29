@@ -45,8 +45,8 @@ export default function Settings({ me, onChanged }: { me: Me; onChanged: () => v
     <Stack spacing={2}>
       <Card variant="outlined">
         <CardContent sx={{ pb: 0 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Groups</Typography>
-          <Typography variant="body2" color="text.secondary">One per child. Each gets its own big on/off button.</Typography>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Children</Typography>
+          <Typography variant="body2" color="text.secondary">Each child gets their own big on/off button on the home screen.</Typography>
         </CardContent>
         <List>
           {groups.map((g) => (
@@ -57,7 +57,7 @@ export default function Settings({ me, onChanged }: { me: Me; onChanged: () => v
             </ListItem>
           ))}
         </List>
-        <CardContent sx={{ pt: 0 }}><Button startIcon={<Add />} onClick={() => setGroupDlg({ id: 0, name: '' })}>Add group</Button></CardContent>
+        <CardContent sx={{ pt: 0 }}><Button startIcon={<Add />} onClick={() => setGroupDlg({ id: 0, name: '' })}>Add child</Button></CardContent>
       </Card>
 
       <Card variant="outlined">
@@ -113,7 +113,7 @@ function GroupDialog({ group, onClose, onSave }: { group: { id: number; name: st
   const [name, setName] = useState(group.name)
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>{group.id ? 'Rename group' : 'New group'}</DialogTitle>
+      <DialogTitle>{group.id ? 'Rename child' : 'Add a child'}</DialogTitle>
       <DialogContent>
         <TextField label="Child's name" value={name} onChange={(e) => setName(e.target.value)} fullWidth autoFocus sx={{ mt: 1 }} />
       </DialogContent>

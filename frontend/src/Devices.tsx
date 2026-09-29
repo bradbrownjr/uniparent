@@ -62,7 +62,7 @@ export default function Devices({ onChanged }: { onChanged: () => void }) {
   return (
     <Stack spacing={2}>
       {groups.length === 0 && (
-        <Alert severity="info">Start in <b>Settings</b> by adding a group for each child, then label their devices here.</Alert>
+        <Alert severity="info">Tap a device, name it, and pick <b>+ Add a child…</b> under <b>Child</b> to get started.</Alert>
       )}
       <TextField placeholder="Search name, vendor, IP, access point…" value={q} onChange={(e) => setQ(e.target.value)}
         slotProps={{ input: { startAdornment: <InputAdornment position="start"><Search /></InputAdornment> } }} />
@@ -114,9 +114,13 @@ export default function Devices({ onChanged }: { onChanged: () => void }) {
   )
 }
 
-function EditDevice({ client: c, groups, onClose, onSaved }: {
+const NEW_CHILD = -1
+
+export function EditDevice({ client: c, groups: initialGroups, onClose, onSaved }: {
   client: ClientRow; groups: GroupRow[]; onClose: () => void; onSaved: () => void
 }) {
+  const [groups, setGroups] = useState(initialGroups)
+  const [newChild, setNewChild] = useState<string | null>(null)
   const [label, setLabel] = useState(c.label ?? '')
   const [kind, setKind] = useState(c.kind ?? 'other')
   const [groupId, setGroupId] = useState<number | ''>(c.group_id ?? (c.managed ? '' : groups[0]?.id ?? ''))
@@ -135,6 +139,17 @@ function EditDevice({ client: c, groups, onClose, onSaved }: {
         body: { label: label.trim(), kind, group_id: groupId === '' ? null : groupId, notes } })
       notify(`Saved ${label.trim()}`)
       onSaved()
+    } catch (e) { notify((e as Error).message, true) }
+  }
+
+  async function addChild() {
+    const name = newChild?.trim()
+    if (!name) return
+    try {
+      const { id } = await api<{ id: number }>('/api/admin/groups', { body: { name } })
+      setGroups([...groups, { id, name }].sort((a, b) => a.name.localeCompare(b.name)))
+      setGroupId(id); setNewChild(null)
+      notify(`Added ${name}`)
     } catch (e) { notify((e as Error).message, true) }
   }
 
@@ -174,18 +189,31 @@ function EditDevice({ client: c, groups, onClose, onSaved }: {
               <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}><KindIcon kind={k.value} fontSize="small" /><span>{k.label}</span></Stack>
             </MenuItem>)}
           </TextField>
-          <TextField select label="Belongs to" value={groupId}
-            onChange={(e) => setGroupId(e.target.value === '' ? '' : Number(e.target.value))}>
-            <MenuItem value=""><em>No group (switch it on its own)</em></MenuItem>
-            {groups.map((g) => <MenuItem key={g.id} value={g.id}>{g.name}</MenuItem>)}
-          </TextField>
+          {newChild === null ? (
+            <TextField select label="Child" value={groupId}
+              onChange={(e) => {
+                const v = e.target.value === '' ? '' : Number(e.target.value)
+                if (v === NEW_CHILD) setNewChild('')
+                else setGroupId(v)
+              }}>
+              {groups.map((g) => <MenuItem key={g.id} value={g.id}>{g.name}</MenuItem>)}
+              <MenuItem value={NEW_CHILD} sx={{ color: 'primary.main' }}>+ Add a child…</MenuItem>
+              <MenuItem value=""><em>Not assigned to a child</em></MenuItem>
+            </TextField>
+          ) : (
+            <Stack direction="row" spacing={1} component="form" onSubmit={(e) => { e.preventDefault(); addChild() }}>
+              <TextField label="New child's name" value={newChild} onChange={(e) => setNewChild(e.target.value)} fullWidth autoFocus />
+              <Button type="submit" variant="contained" disabled={!newChild.trim()}>Add</Button>
+              <Button onClick={() => setNewChild(null)}>Cancel</Button>
+            </Stack>
+          )}
           <TextField label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} multiline minRows={2} />
         </Stack>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
         {c.managed && <Button color="error" onClick={forget} sx={{ mr: 'auto' }}>Stop managing</Button>}
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={save} disabled={!label.trim()}>Save</Button>
+        <Button variant="contained" onClick={save} disabled={!label.trim() || newChild !== null}>Save</Button>
       </DialogActions>
     </Dialog>
   )

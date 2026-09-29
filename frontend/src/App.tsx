@@ -103,7 +103,7 @@ export default function App() {
 
       <Container maxWidth="sm" sx={{ pt: 1, pb: 'calc(96px + env(safe-area-inset-bottom))' }}>
         {offline && <Alert severity="error" sx={{ mb: 2 }}>Can't reach UniParent. Are you on the home WiFi?</Alert>}
-        {tab === 'home' && <HomePage status={status} reload={reload} isAdmin={me.role === 'admin'} goDevices={() => setTab('settings')} />}
+        {tab === 'home' && <HomePage status={status} reload={reload} isAdmin={me.role === 'admin'} go={setTab} />}
         {tab === 'activity' && <Activity refreshKey={refreshKey} />}
         {tab === 'devices' && <DevicesPage onChanged={changed} />}
         {tab === 'schedules' && <Schedules onChanged={changed} />}

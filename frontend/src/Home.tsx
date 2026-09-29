@@ -18,14 +18,19 @@ import ListItemButton from '@mui/material/ListItemButton'
 import ListItemText from '@mui/material/ListItemText'
 import Stack from '@mui/material/Stack'
 import Switch from '@mui/material/Switch'
+import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
+import Add from '@mui/icons-material/Add'
 import Bedtime from '@mui/icons-material/Bedtime'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import Edit from '@mui/icons-material/Edit'
 import HourglassTop from '@mui/icons-material/HourglassTop'
 import Lock from '@mui/icons-material/Lock'
 import Wifi from '@mui/icons-material/Wifi'
 import WifiOff from '@mui/icons-material/WifiOff'
-import { api, type Device, type Group, type Status } from './api'
+import { api, type ClientRow, type Device, type Group, type GroupRow, type Status } from './api'
+import { EditDevice } from './Devices'
 import { KindIcon, useNotify } from './common'
 import { deviceLine, left, nextMorning, stateLine, when } from './format'
 
@@ -40,10 +45,13 @@ const PAUSES: Pause[] = [
 const EXTRA = [15, 30, 60, 120]
 const extraLabel = (m: number, plus = false) => (plus ? '+' : '') + (m < 60 ? `${m} min` : `${m / 60} hour${m > 60 ? 's' : ''}`)
 
-export default function Home({ status, reload, isAdmin, goDevices }: {
-  status: Status | null; reload: () => Promise<void>; isAdmin: boolean; goDevices: () => void
+export type SetupTab = 'devices' | 'schedules'
+
+export default function Home({ status, reload, isAdmin, go }: {
+  status: Status | null; reload: () => Promise<void>; isAdmin: boolean; go: (t: SetupTab) => void
 }) {
   if (!status) return null
+  const hasDevices = status.groups.some((g) => g.devices.length > 0)
   const empty = status.groups.length === 0 && status.ungrouped.length === 0
   return (
     <Stack spacing={2}>
@@ -52,28 +60,25 @@ export default function Home({ status, reload, isAdmin, goDevices }: {
           Can't talk to the WiFi controller right now, so changes may not take effect yet. It will keep trying.
         </Alert>
       )}
-      {empty && (
+      {isAdmin && !hasDevices && <SetupCard groups={status.groups} reload={reload} go={go} />}
+      {!isAdmin && empty && (
         <Card variant="outlined"><CardContent>
-          <Typography variant="h6">No devices yet</Typography>
-          <Typography color="text.secondary" sx={{ mb: 2 }}>
-            {isAdmin ? "Add a group for each child, then label their devices and put them in it."
-              : 'Ask the admin to set up the kids’ devices.'}
-          </Typography>
-          {isAdmin && <Button variant="contained" onClick={goDevices}>Set up devices</Button>}
+          <Typography variant="h6">Nothing set up yet</Typography>
+          <Typography color="text.secondary">Ask the admin to add the kids and their devices.</Typography>
         </CardContent></Card>
       )}
-      {status.groups.map((g) => <GroupCard key={g.id} group={g} reload={reload} />)}
+      {status.groups.map((g) => <GroupCard key={g.id} group={g} reload={reload} isAdmin={isAdmin} />)}
       {status.ungrouped.length > 0 && (
         <Card variant="outlined">
-          <CardContent sx={{ pb: 0 }}><Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Other devices</Typography></CardContent>
-          <DeviceList devices={status.ungrouped} reload={reload} />
+          <CardContent sx={{ pb: 0 }}><Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Not assigned to a child</Typography></CardContent>
+          <DeviceList devices={status.ungrouped} reload={reload} isAdmin={isAdmin} />
         </Card>
       )}
     </Stack>
   )
 }
 
-function GroupCard({ group: g, reload }: { group: Group; reload: () => Promise<void> }) {
+function GroupCard({ group: g, reload, isAdmin }: { group: Group; reload: () => Promise<void>; isAdmin: boolean }) {
   const notify = useNotify()
   const [busy, setBusy] = useState(false)
   const off = g.state.off
@@ -170,18 +175,29 @@ function GroupCard({ group: g, reload }: { group: Group; reload: () => Promise<v
       </CardContent>
       {g.devices.length > 0 && (
         <Box sx={{ bgcolor: 'background.paper', color: 'text.primary' }}>
-          <DeviceList devices={g.devices} reload={reload} groupOff={off} />
+          <DeviceList devices={g.devices} reload={reload} groupOff={off} isAdmin={isAdmin} />
         </Box>
       )}
     </Card>
   )
 }
 
-function DeviceList({ devices, reload, groupOff = false }: {
-  devices: Device[]; reload: () => Promise<void>; groupOff?: boolean
+function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
+  devices: Device[]; reload: () => Promise<void>; groupOff?: boolean; isAdmin: boolean
 }) {
   const [open, setOpen] = useState<Device | null>(null)
+  const [editing, setEditing] = useState<{ client: ClientRow; groups: GroupRow[] } | null>(null)
   const notify = useNotify()
+
+  async function edit(d: Device) {
+    try {
+      const [clients, groups] = await Promise.all([api<ClientRow[]>('/api/admin/clients'), api<GroupRow[]>('/api/admin/groups')])
+      const client = clients.find((c) => c.mac === d.mac)
+      if (!client) throw new Error(`${d.label} wasn't found on the controller`)
+      setOpen(null)
+      setEditing({ client, groups })
+    } catch (e) { notify((e as Error).message, true) }
+  }
 
   async function act(d: Device, action: 'on' | 'off' | 'pause' | 'bonus' | 'endbonus', body?: object) {
     try {
@@ -264,6 +280,7 @@ function DeviceList({ devices, reload, groupOff = false }: {
               )}
             </DialogContent>
             <DialogActions>
+              {isAdmin && <Button startIcon={<Edit />} onClick={() => edit(open)} sx={{ mr: 'auto' }}>Edit</Button>}
               <Button onClick={() => setOpen(null)}>Close</Button>
               {!open.wired && open.state.reason === 'bonus' && (
                 <Button variant="contained" color="error" startIcon={<Lock />}
@@ -275,6 +292,67 @@ function DeviceList({ devices, reload, groupOff = false }: {
           </>
         )}
       </Dialog>
+      {editing && <EditDevice client={editing.client} groups={editing.groups} onClose={() => setEditing(null)}
+        onSaved={() => { setEditing(null); reload() }} />}
     </>
+  )
+}
+
+// First-run checklist for admins: children first (schedules and the big buttons hang off them), then devices.
+function SetupCard({ groups, reload, go }: { groups: Group[]; reload: () => Promise<void>; go: (t: SetupTab) => void }) {
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const notify = useNotify()
+  const haveKids = groups.length > 0
+
+  async function add() {
+    const n = name.trim()
+    if (!n) return
+    setBusy(true)
+    try {
+      await api('/api/admin/groups', { body: { name: n } })
+      setName(''); notify(`Added ${n}`); await reload()
+    } catch (e) { notify((e as Error).message, true) } finally { setBusy(false) }
+  }
+
+  const step = (n: number, done: boolean, title: string) => (
+    <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', mb: 1 }}>
+      {done ? <CheckCircle color="success" /> : <Avatar sx={{ width: 24, height: 24, fontSize: 14, bgcolor: 'primary.main' }}>{n}</Avatar>}
+      <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{title}</Typography>
+    </Stack>
+  )
+
+  return (
+    <Card variant="outlined"><CardContent>
+      <Typography variant="h6" sx={{ mb: 2 }}>Let's get set up</Typography>
+      {step(1, haveKids, 'Add your children')}
+      <Box sx={{ pl: 4.5, mb: 2.5 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Each child gets a big on/off button here, and their own schedules.
+        </Typography>
+        {haveKids && <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
+          {groups.map((g) => <Chip key={g.id} label={g.name} />)}
+        </Stack>}
+        <Stack direction="row" spacing={1} component="form" onSubmit={(e) => { e.preventDefault(); add() }}>
+          <TextField size="small" label={haveKids ? 'Another child' : "Child's name"} value={name}
+            onChange={(e) => setName(e.target.value)} fullWidth />
+          <Button type="submit" variant={haveKids ? 'outlined' : 'contained'} startIcon={<Add />} disabled={busy || !name.trim()}>Add</Button>
+        </Stack>
+      </Box>
+      {step(2, false, 'Name their devices')}
+      <Box sx={{ pl: 4.5, mb: 2.5 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          In Devices, tap each of your child's phones, tablets and consoles, give it a name and pick the child.
+        </Typography>
+        <Button variant={haveKids ? 'contained' : 'outlined'} disabled={!haveKids} onClick={() => go('devices')}>Set up devices</Button>
+      </Box>
+      {step(3, false, 'Bedtime and homework (optional)')}
+      <Box sx={{ pl: 4.5 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Schedules turn a child's WiFi off at set times, such as 9 PM – 7 AM on school nights.
+        </Typography>
+        <Button disabled={!haveKids} onClick={() => go('schedules')}>Add a schedule</Button>
+      </Box>
+    </CardContent></Card>
   )
 }

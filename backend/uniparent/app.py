@@ -210,7 +210,7 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
         try:
             await svc.set_group(gid, action, user, pause_until(body), body.minutes if body else None)
         except KeyError:
-            raise HTTPException(404, "no such group")
+            raise HTTPException(404, "no such child")
         except ValueError as e:
             raise HTTPException(400, str(e))
         return {"ok": True, "controller_error": svc.last_error}
@@ -273,7 +273,7 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
         if body.kind not in KINDS:
             raise HTTPException(400, f"kind must be one of {KINDS}")
         if body.group_id is not None and not db.one("SELECT 1 FROM groups WHERE id=?", (body.group_id,)):
-            raise HTTPException(400, "no such group")
+            raise HTTPException(400, "no such child")
         existed = db.one("SELECT 1 FROM devices WHERE mac=?", (mac,))
         db.x("INSERT INTO devices (mac, label, kind, group_id, notes) VALUES (?,?,?,?,?) "
              "ON CONFLICT(mac) DO UPDATE SET label=excluded.label, kind=excluded.kind, "
@@ -315,9 +315,9 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
     @app.post("/api/admin/groups")
     async def add_group(body: GroupIn, user: dict = Depends(admin_user)):
         if db.one("SELECT 1 FROM groups WHERE name=?", (body.name.strip(),)):
-            raise HTTPException(400, "a group with that name exists")
+            raise HTTPException(400, "there is already a child with that name")
         gid = db.x("INSERT INTO groups (name) VALUES (?)", (body.name.strip(),))
-        db.log(user["display_name"], "Added group", body.name, user["id"])
+        db.log(user["display_name"], "Added child", body.name, user["id"])
         return {"id": gid}
 
     @app.put("/api/admin/groups/{gid}")
@@ -331,7 +331,7 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
         if g is None:
             raise HTTPException(404)
         db.x("DELETE FROM groups WHERE id=?", (gid,))  # devices fall back to ungrouped, schedules go
-        db.log(user["display_name"], "Deleted group", g["name"], user["id"])
+        db.log(user["display_name"], "Removed child", g["name"], user["id"])
         await svc.reconcile()
         return {"ok": True}
 
@@ -345,7 +345,7 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
         except ValueError as e:
             raise HTTPException(400, str(e))
         if not db.one("SELECT 1 FROM groups WHERE id=?", (body.group_id,)):
-            raise HTTPException(400, "no such group")
+            raise HTTPException(400, "no such child")
 
     @app.post("/api/admin/schedules")
     async def add_schedule(body: ScheduleIn, user: dict = Depends(admin_user)):

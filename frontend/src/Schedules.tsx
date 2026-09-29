@@ -58,12 +58,12 @@ export default function Schedules({ onChanged }: { onChanged: () => void }) {
   }
 
   if (!rows) return null
-  if (groups.length === 0) return <Alert severity="info">Add a group in <b>Settings</b> first.</Alert>
+  if (groups.length === 0) return <Alert severity="info">Add a child first — in <b>Settings</b>, or while naming a device in <b>Devices</b>.</Alert>
 
   return (
     <Stack spacing={2}>
       <Typography color="text.secondary">
-        During a schedule the group's WiFi is off. Tapping <b>Turn WiFi back on</b> during one skips just that time.
+        During a schedule the child's WiFi is off. Tapping <b>Turn WiFi back on</b> during one skips just that time.
       </Typography>
       {groups.map((g) => {
         const mine = rows.filter((r) => r.group_id === g.id)
@@ -108,7 +108,7 @@ function ScheduleDialog({ draft, groups, onClose, onSave, onDelete }: {
       <DialogContent>
         <Stack spacing={2.5} sx={{ pt: 1 }}>
           <TextField label="Name" placeholder="Bedtime, Homework…" value={d.label} onChange={(e) => setD({ ...d, label: e.target.value })} />
-          <TextField select label="Group" value={d.group_id} onChange={(e) => setD({ ...d, group_id: Number(e.target.value) })}>
+          <TextField select label="Child" value={d.group_id} onChange={(e) => setD({ ...d, group_id: Number(e.target.value) })}>
             {groups.map((g) => <MenuItem key={g.id} value={g.id}>{g.name}</MenuItem>)}
           </TextField>
           <Stack direction="row" spacing={2}>

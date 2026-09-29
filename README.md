@@ -4,15 +4,15 @@
 
 **A simple phone app for turning your kids' WiFi off and on — all their devices at once, or one at a time — on a network run by a UniFi controller.**
 
-Parents get one big button per child, quick "off for an hour" or "until morning" pauses, **extra screen time that locks again by itself**, and a per-device switch. An admin can find and label each device, group them by child, set bedtime and homework schedules, and see who did what in an activity log.
+Parents get one big button per child, quick "off for an hour" or "until morning" pauses, **extra screen time that locks again by itself**, and a per-device switch. An admin can find and label each device, assign it to a child, set bedtime and homework schedules, and see who did what in an activity log.
 
 UniParent runs as a small web app on your home server and installs on Android (and iPhone) like a regular app.
 
 ## What it does
 
-- **One button per child** turns WiFi off for every device in their group, and back on.
+- **One button per child** turns WiFi off for all of that child's devices, and back on.
 - **Pauses**: 30 min, 1 hour, 2 hours or until 7 AM; WiFi comes back by itself.
-- **Extra screen time**: dinner and chores done? Give 15 min, 30 min, 1 hour or 2 hours while WiFi is off — during a pause or even a bedtime schedule — and it locks again by itself when the time is up. Tap again to add more, or *Lock again now* to end it early. Works for the whole group or a single device.
+- **Extra screen time**: dinner and chores done? Give 15 min, 30 min, 1 hour or 2 hours while WiFi is off — during a pause or even a bedtime schedule — and it locks again by itself when the time is up. Tap again to add more, or *Lock again now* to end it early. Works for a whole child or a single device.
 - **Per-device switches**, including letting one device back on (say, the school laptop) while the rest stay off.
 - **Schedules** such as *Bedtime, school nights 9 PM – 7 AM*. Tapping *Turn WiFi back on* during a schedule skips just that one.
 - **Activity**: see which devices are in use right now, and an admin traffic chart per device for the last 24 hours.
@@ -72,7 +72,7 @@ On Unraid with the Compose Manager plugin, paste `docker-compose.yml` into a new
 docker exec -it uniparent uniparent create-user yourname --role admin --name "Your Name"
 ```
 
-Sign in, then in **Settings** add a group for each child and add the other parent (role *Parent*). In **Devices**, tap each of your child's devices, name it, and put it in their group. To find a device, have your child use it and check **Busiest**, or look at which access point it's on.
+Sign in and the home screen walks you through setup: first **add your children**, then in **Devices** tap each of your child's devices, name it, and pick the child (you can also add a child from there). Schedules are optional. Add the other parent in **Settings** (role *Parent*). To find a device, have your child use it and check **Busiest**, or look at which access point it's on.
 
 ### 4. Put it behind HTTPS and install it on phones
 
