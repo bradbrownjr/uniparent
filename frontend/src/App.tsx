@@ -69,9 +69,11 @@ export default function App() {
   }, [me, reload])
 
   const tabs = useMemo(() => {
-    const t: [Tab, string, React.ReactNode][] = [['home', 'Home', <Home />], ['activity', 'Activity', <History />]]
-    if (me?.role === 'admin') t.push(['devices', 'Devices', <Devices />], ['schedules', 'Schedules', <Schedule />],
-      ['settings', 'Settings', <SettingsIcon />])
+    // Most-used first; Activity sits after the admin tools (for parents it's simply second).
+    const t: [Tab, string, React.ReactNode][] = [['home', 'Home', <Home />]]
+    if (me?.role === 'admin') t.push(['devices', 'Devices', <Devices />], ['schedules', 'Schedules', <Schedule />])
+    t.push(['activity', 'Activity', <History />])
+    if (me?.role === 'admin') t.push(['settings', 'Settings', <SettingsIcon />])
     return t
   }, [me])
 
