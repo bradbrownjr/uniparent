@@ -24,7 +24,7 @@ class Schedule:
 @dataclass(frozen=True)
 class State:
     off: bool
-    reason: str = ""            # manual | pause | schedule | group | ""
+    reason: str = ""            # off: manual | pause | schedule | group; on: bonus | ""
     until: int | None = None    # epoch seconds when this state is expected to end, None = until changed
     detail: str = ""            # e.g. schedule label
 
@@ -98,6 +98,8 @@ def _live(ts: int | None, now: int) -> bool:
 
 
 def group_state(group: dict, schedules: list[Schedule], now: int, tz: ZoneInfo) -> State:
+    if _live(group.get("bonus_until"), now):
+        return State(False, "bonus", group["bonus_until"])  # extra screen time; locks again afterwards
     if group["manual_off"]:
         return State(True, "manual")
     if _live(group["pause_until"], now):
@@ -109,6 +111,8 @@ def group_state(group: dict, schedules: list[Schedule], now: int, tz: ZoneInfo) 
 
 
 def device_state(device: dict, group: State | None, now: int) -> State:
+    if _live(device.get("bonus_until"), now):
+        return State(False, "bonus", device["bonus_until"])
     if device["manual_off"]:
         return State(True, "manual")
     if _live(device["pause_until"], now):

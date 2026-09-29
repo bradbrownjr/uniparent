@@ -27,4 +27,5 @@ class Settings:
     # Only honour X-Forwarded-For when running behind a trusted reverse proxy.
     trust_proxy: bool = field(default_factory=lambda: _bool("TRUST_PROXY", True))
     background: bool = field(default_factory=lambda: _bool("UNIPARENT_BACKGROUND", True))
+    demo: bool = field(default_factory=lambda: _bool("UNIPARENT_DEMO", False))
     static_dir: str = field(default_factory=lambda: os.environ.get("UNIPARENT_STATIC", "/app/static"))

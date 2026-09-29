@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS groups (
     name           TEXT NOT NULL UNIQUE,
     manual_off     INTEGER NOT NULL DEFAULT 0,
     pause_until    INTEGER,          -- off until this time
-    override_until INTEGER           -- on until this time, even inside a schedule window
+    override_until INTEGER,          -- on until this time, even inside a schedule window
+    bonus_until    INTEGER           -- extra screen time: on until this time, beats every off; then locks again
 );
 CREATE TABLE IF NOT EXISTS devices (
     mac            TEXT PRIMARY KEY,  -- lower-case aa:bb:cc:dd:ee:ff
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS devices (
     pause_until    INTEGER,
     override_until INTEGER,           -- on until this time even while its group is off
     applied_off    INTEGER,           -- last block state UniParent pushed (NULL = never); see Service.reconcile
+    bonus_until    INTEGER,           -- extra screen time for just this device
     notes          TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS schedules (
@@ -67,6 +69,14 @@ CREATE TABLE IF NOT EXISTS counters (   -- last cumulative byte counter seen per
 CREATE INDEX IF NOT EXISTS traffic_ts ON traffic(ts);
 """
 
+# Columns added after the first release: (table, column, type). CREATE TABLE above already has them;
+# this only upgrades older databases in place.
+MIGRATIONS = [
+    ("devices", "applied_off", "INTEGER"),
+    ("groups", "bonus_until", "INTEGER"),
+    ("devices", "bonus_until", "INTEGER"),
+]
+
 
 class DB:
     """One shared connection guarded by a lock; the app's queries are tiny."""
@@ -79,6 +89,10 @@ class DB:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA foreign_keys=ON")
             self.conn.executescript(SCHEMA)
+            for table, col, typ in MIGRATIONS:
+                have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+                if col not in have:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
 
     def q(self, sql: str, args=()) -> list[sqlite3.Row]:
         with self.lock:

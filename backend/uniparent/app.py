@@ -17,6 +17,8 @@ from .rules import State, validate_schedule
 from .service import Service, norm_mac
 from .unifi import UniFi
 
+# pause: {minutes} or {until}; bonus (extra screen time, locks again after): {minutes}
+ACTIONS = ("on", "off", "pause", "bonus", "endbonus")
 KINDS = ("phone", "tablet", "laptop", "computer", "tv", "console", "watch", "speaker", "other")
 
 
@@ -79,6 +81,10 @@ def state_json(st: State) -> dict:
 def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> FastAPI:
     settings = settings or Settings()
     db = DB(settings.db_path)
+    if unifi is None and settings.demo:
+        from .demo import DemoUniFi, seed
+        unifi = DemoUniFi()
+        seed(db)
     unifi = unifi or UniFi(settings.unifi_host, settings.unifi_api_key, settings.unifi_site,
                            settings.unifi_verify_tls)
     svc = Service(settings, db, unifi)
@@ -199,10 +205,10 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
 
     @app.post("/api/groups/{gid}/{action}")
     async def group_action(gid: int, action: str, body: Pause | None = None, user: dict = Depends(current_user)):
-        if action not in ("on", "off", "pause"):
+        if action not in ACTIONS:
             raise HTTPException(404)
         try:
-            await svc.set_group(gid, action, user, pause_until(body))
+            await svc.set_group(gid, action, user, pause_until(body), body.minutes if body else None)
         except KeyError:
             raise HTTPException(404, "no such group")
         except ValueError as e:
@@ -212,10 +218,10 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
     @app.post("/api/devices/{mac}/{action}")
     async def device_action(mac: str, action: str, body: Pause | None = None,
                             user: dict = Depends(current_user)):
-        if action not in ("on", "off", "pause"):
+        if action not in ACTIONS:
             raise HTTPException(404)
         try:
-            await svc.set_device(mac_or_400(mac), action, user, pause_until(body))
+            await svc.set_device(mac_or_400(mac), action, user, pause_until(body), body.minutes if body else None)
         except KeyError:
             raise HTTPException(404, "no such device")
         except ValueError as e:

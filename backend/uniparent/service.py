@@ -76,9 +76,9 @@ class Service:
             now = now or int(time.time())
             self._expire(now)
             groups = self.group_states(now)
-            # Device overrides only matter while their group is off.
+            # Device overrides only matter while their group is off (extra screen time is temporary, keep them).
             for gid, st in groups.items():
-                if not st.off:
+                if not st.off and st.reason != "bonus":
                     self.db.x("UPDATE devices SET override_until=NULL WHERE group_id=? AND override_until IS NOT NULL",
                               (gid,))
             devices = self.device_states(now, groups)
@@ -108,13 +108,14 @@ class Service:
                         await self.unifi.unblock(mac)
                         c.blocked = False
                     self.db.x("UPDATE devices SET applied_off=? WHERE mac=?", (int(st.off), mac))
+                    self.clients_at = 0  # the device is (dis)connecting: next status read should be fresh
                 except UniFiError as e:  # not recorded as applied, so the next pass retries
                     self.last_error = str(e)
                     log.warning("could not update %s: %s", mac, e)
 
     def _expire(self, now: int):
         for table in ("groups", "devices"):
-            for col in ("pause_until", "override_until"):
+            for col in ("pause_until", "override_until", "bonus_until"):
                 self.db.x(f"UPDATE {table} SET {col}=NULL WHERE {col} IS NOT NULL AND {col}<=?", (now,))
 
     def _log_transitions(self, groups: dict[int, State], devices: dict[str, State]):
@@ -123,7 +124,9 @@ class Service:
         for gid, st in groups.items():
             prev = self._last_group.get(gid)
             if prev is not None and prev.off != st.off:
-                if st.off and st.reason == "schedule":
+                if st.off and prev.reason == "bonus":
+                    self.db.log("Timer", "Extra time is up — WiFi off", names[gid])
+                elif st.off and st.reason == "schedule":
                     self.db.log("Schedule", f"WiFi off{' — ' + st.detail if st.detail else ''}", names[gid])
                 elif not st.off:
                     self.db.log("Schedule" if prev.reason == "schedule" else "Timer",
@@ -134,6 +137,8 @@ class Service:
             prev = self._last_device.get(mac)
             if prev is not None and prev.off and not st.off and prev.reason == "pause":
                 self.db.log("Timer", "WiFi back on", labels[mac])
+            elif prev is not None and not prev.off and st.off and prev.reason == "bonus":
+                self.db.log("Timer", "Extra time is up — WiFi off", labels[mac])
             self._last_device[mac] = st
         for gone in set(self._last_device) - set(devices):
             del self._last_device[gone]
@@ -146,11 +151,34 @@ class Service:
 
     # ---- user actions ------------------------------------------------------------------------
 
-    async def set_group(self, gid: int, action: str, user: dict, until: int | None = None) -> None:
+    def _group_macs(self, gid: int) -> set[str]:
+        return {r["mac"] for r in self.db.q("SELECT mac FROM devices WHERE group_id=?", (gid,))}
+
+    async def set_group(self, gid: int, action: str, user: dict, until: int | None = None,
+                        minutes: int | None = None) -> None:
         g = self.db.one("SELECT * FROM groups WHERE id=?", (gid,))
         if g is None:
             raise KeyError("group")
         now = int(time.time())
+        if action == "bonus":
+            if not minutes or minutes <= 0:
+                raise ValueError("extra time needs a number of minutes")
+            # Stack on top of extra time that's still running: "another 30 minutes".
+            until = max(now, g["bonus_until"] or 0) + minutes * 60
+            self.db.x("UPDATE groups SET bonus_until=? WHERE id=?", (until, gid))
+            self.db.log(user["display_name"], f"Added {self.mins(minutes)} of screen time (until {self.fmt(until)})",
+                        g["name"], user["id"])
+            self._mark_seen(now)
+            await self.reconcile(now, force=self._group_macs(gid))
+            return
+        if action == "endbonus":
+            self.db.x("UPDATE groups SET bonus_until=NULL WHERE id=?", (gid,))
+            self.db.log(user["display_name"], "Ended extra time early", g["name"], user["id"])
+            self._mark_seen(now)
+            await self.reconcile(now, force=self._group_macs(gid))
+            return
+        # Any on/off/pause replaces running extra time.
+        self.db.x("UPDATE groups SET bonus_until=NULL WHERE id=?", (gid,))
         if action == "off":
             self.db.x("UPDATE groups SET manual_off=1, pause_until=NULL, override_until=NULL WHERE id=?", (gid,))
             what = "Turned WiFi off"
@@ -170,14 +198,28 @@ class Service:
         self.db.x("UPDATE devices SET override_until=NULL WHERE group_id=?", (gid,))
         self.db.log(user["display_name"], what, g["name"], user["id"])
         self._mark_seen(now)
-        await self.reconcile(now, force={r["mac"] for r in self.db.q("SELECT mac FROM devices WHERE group_id=?",
-                                                                     (gid,))})
+        await self.reconcile(now, force=self._group_macs(gid))
 
-    async def set_device(self, mac: str, action: str, user: dict, until: int | None = None) -> None:
+    async def set_device(self, mac: str, action: str, user: dict, until: int | None = None,
+                         minutes: int | None = None) -> None:
         d = self.db.one("SELECT * FROM devices WHERE mac=?", (mac,))
         if d is None:
             raise KeyError("device")
         now = int(time.time())
+        if action in ("bonus", "endbonus"):
+            if action == "bonus":
+                if not minutes or minutes <= 0:
+                    raise ValueError("extra time needs a number of minutes")
+                new = max(now, d["bonus_until"] or 0) + minutes * 60
+                what = f"Added {self.mins(minutes)} of screen time (until {self.fmt(new)})"
+            else:
+                new, what = None, "Ended extra time early"
+            self.db.x("UPDATE devices SET bonus_until=? WHERE mac=?", (new, mac))
+            self.db.log(user["display_name"], what, d["label"], user["id"])
+            self._mark_seen(now)
+            await self.reconcile(now, force={mac})
+            return
+        self.db.x("UPDATE devices SET bonus_until=NULL WHERE mac=?", (mac,))
         if action == "off":
             self.db.x("UPDATE devices SET manual_off=1, pause_until=NULL, override_until=NULL WHERE mac=?", (mac,))
             what = "Turned WiFi off"
@@ -203,8 +245,9 @@ class Service:
     async def unblock_all(self, actor: str, user_id: int | None = None) -> int:
         """Escape hatch: clear every off/pause and unblock every managed device on the controller."""
         async with self._lock:
-            self.db.x("UPDATE groups SET manual_off=0, pause_until=NULL, override_until=NULL")
-            self.db.x("UPDATE devices SET manual_off=0, pause_until=NULL, override_until=NULL, applied_off=0")
+            self.db.x("UPDATE groups SET manual_off=0, pause_until=NULL, override_until=NULL, bonus_until=NULL")
+            self.db.x("UPDATE devices SET manual_off=0, pause_until=NULL, override_until=NULL, bonus_until=NULL, "
+                      "applied_off=0")
             self.db.x("UPDATE schedules SET enabled=0")
             clients = await self.refresh_clients(max_age=0)
             n = 0
@@ -247,8 +290,17 @@ class Service:
 
     # ---- helpers -------------------------------------------------------------------------------
 
+    @staticmethod
+    def mins(m: int) -> str:
+        if m % 60 == 0:
+            h = m // 60
+            return f"{h} hour{'s' if h > 1 else ''}"
+        return f"{m} min"
+
     def fmt(self, ts: int) -> str:
-        return datetime.fromtimestamp(ts, self.s.tz).strftime("%a %-I:%M %p")
+        d = datetime.fromtimestamp(ts, self.s.tz)
+        same_day = d.date() == datetime.now(self.s.tz).date()
+        return d.strftime("%-I:%M %p" if same_day else "%a %-I:%M %p")
 
     def next_off(self, gid: int, now: int) -> tuple[int, str] | None:
         n = next_window_start(self.schedules(gid), now, self.s.tz)
