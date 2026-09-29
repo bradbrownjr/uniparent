@@ -142,6 +142,8 @@ export function EditDevice({ client: c, groups: initialGroups, onClose, onSaved 
     } catch (e) { notify((e as Error).message, true) }
   }
 
+  const childName = groups.find((g) => g.id === groupId)?.name
+
   async function addChild() {
     const name = newChild?.trim()
     if (!name) return
@@ -182,7 +184,7 @@ export function EditDevice({ client: c, groups: initialGroups, onClose, onSaved 
               {traffic ? `${bytes(traffic.reduce((s, p) => s + p.bytes, 0))} total · last active ${ago(c.last_active)}` : ' '}
             </Typography>
           </Box>
-          <TextField label="Name" placeholder="e.g. Riley's phone" value={label} onChange={(e) => setLabel(e.target.value)}
+          <TextField label="Name" placeholder={childName ? `e.g. ${childName}'s phone` : 'e.g. Upstairs tablet'} value={label} onChange={(e) => setLabel(e.target.value)}
             required autoFocus={!c.managed} />
           <TextField select label="Type" value={kind} onChange={(e) => setKind(e.target.value)}>
             {KINDS.map((k) => <MenuItem key={k.value} value={k.value}>
