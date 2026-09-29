@@ -1,7 +1,7 @@
 services:
   uniparent:
-    build: .
-    image: uniparent:latest
+    image: ghcr.io/bradbrownjr/uniparent:latest
+    # build: .    # uncomment to build from this checkout instead of pulling
     container_name: uniparent
     env_file: .env
     ports:

@@ -40,12 +40,17 @@ On Network 9.x the same page is under **Settings → Control Plane → Integrati
 
 ### 2. Run the container
 
+Images are published to `ghcr.io/bradbrownjr/uniparent:latest` on every push to `main`.
+
 ```bash
-git clone https://github.com/bradbrownjr/uniparent.git
-cd uniparent
-cp .env.example .env        # then set UNIFI_HOST and UNIFI_API_KEY
-docker compose up -d --build
+mkdir uniparent && cd uniparent
+curl -O https://raw.githubusercontent.com/bradbrownjr/uniparent/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/bradbrownjr/uniparent/main/.env.example
+nano .env                   # set UNIFI_HOST and UNIFI_API_KEY
+docker compose up -d
 ```
+
+On Unraid with the Compose Manager plugin, paste `docker-compose.yml` into a new stack and the `.env` values into its env file. To build from source instead, clone the repo and use `build: .` in the compose file.
 
 `docker-compose.yml` stores the database in `/mnt/user/appdata/uniparent` (the Unraid convention); change the volume path for other hosts. The app listens on port **8095**.
 
