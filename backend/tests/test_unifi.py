@@ -9,7 +9,7 @@ from uniparent.unifi import UniFi, UniFiError
 AP = "e0:00:00:00:00:01"
 DEVICES = [{"mac": AP, "name": "Living Room"}]
 USERS = [
-    {"mac": "aa:00:00:00:00:01", "hostname": "Galaxy-A15", "oui": "Samsung", "last_ip": "192.0.2.10",
+    {"mac": "aa:00:00:00:00:01", "name": "Kitchen phone", "hostname": "Galaxy-A15", "oui": "Samsung", "last_ip": "192.0.2.10",
      "first_seen": 100, "last_seen": 200},
     {"mac": "aa:00:00:00:00:02", "oui": "TP-Link", "blocked": True, "last_uplink_name": "Living Room",
      "last_ip": "192.0.2.11", "first_seen": 50, "last_seen": 60},
@@ -41,7 +41,8 @@ def test_clients_merge():
     phone, plug, roku = c["aa:00:00:00:00:01"], c["aa:00:00:00:00:02"], c["aa:00:00:00:00:09"]
     assert phone.online and phone.ap == "Living Room" and phone.total_bytes == 15 and phone.signal == -55
     assert not plug.online and plug.blocked and plug.ap == "Living Room" and plug.name == "TP-Link"
-    assert roku.online and roku.wired
+    assert phone.name == "Kitchen phone" and phone.hostname == "Galaxy-A15"  # UniFi name wins, hostname kept
+    assert roku.online and roku.wired and plug.hostname == ""
     assert all(k == "KEY" for _, _, k, _ in seen)
 
 

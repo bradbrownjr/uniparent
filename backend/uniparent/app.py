@@ -249,7 +249,7 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
         for mac, c in clients.items():
             d = managed.get(mac)
             out.append({
-                "mac": mac, "name": c.name, "oui": c.oui, "ip": c.ip, "online": c.online, "wired": c.wired,
+                "mac": mac, "name": c.name, "hostname": c.hostname, "oui": c.oui, "ip": c.ip, "online": c.online, "wired": c.wired,
                 "blocked": c.blocked, "ap": c.ap, "signal": c.signal, "first_seen": c.first_seen,
                 "last_seen": c.last_seen, "last_active": active.get(mac), "bytes_last_hour": hour.get(mac, 0),
                 "randomized_mac": bool(int(mac[:2], 16) & 2),

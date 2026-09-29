@@ -45,8 +45,11 @@ export default function Devices({ onChanged }: { onChanged: () => void }) {
   const shown = useMemo(() => {
     if (!rows) return []
     const needle = q.trim().toLowerCase()
-    let r = rows.filter((c) => !needle || [c.label, c.name, c.oui, c.ip, c.mac, c.ap]
-      .some((v) => v?.toLowerCase().includes(needle)))
+    // MACs match however they're typed: aa:bb…, AA-BB…, aabb.cc…, or a fragment without separators.
+    const hex = needle.replace(/[^0-9a-f]/g, '')
+    const macLike = hex.length >= 4 && /^[0-9a-f:.\-\s]+$/.test(needle)
+    let r = rows.filter((c) => !needle || [c.label, c.name, c.hostname, c.oui, c.ip, c.mac, c.ap]
+      .some((v) => v?.toLowerCase().includes(needle)) || (macLike && c.mac.replace(/:/g, '').includes(hex)))
     if (filter === 'new') r = r.filter((c) => c.new)
     if (filter === 'managed') r = r.filter((c) => c.managed)
     if (filter === 'online') r = r.filter((c) => c.online)
@@ -64,7 +67,7 @@ export default function Devices({ onChanged }: { onChanged: () => void }) {
       {groups.length === 0 && (
         <Alert severity="info">Tap a device, name it, and pick <b>+ Add a child…</b> under <b>Child</b> to get started.</Alert>
       )}
-      <TextField placeholder="Search name, vendor, IP, access point…" value={q} onChange={(e) => setQ(e.target.value)}
+      <TextField placeholder="Search name, hostname, IP, MAC, vendor…" value={q} onChange={(e) => setQ(e.target.value)}
         slotProps={{ input: { startAdornment: <InputAdornment position="start"><Search /></InputAdornment> } }} />
       <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap' }}>
         {([['all', 'All'], ['managed', 'Labeled'], ['new', 'New'], ['online', 'Online'], ['busy', 'Busiest (1 hr)']] as [Filter, string][])
@@ -98,6 +101,7 @@ export default function Devices({ onChanged }: { onChanged: () => void }) {
                   </Stack>}
                   secondary={[
                     c.label && c.label !== c.name ? c.name : null,
+                    c.hostname && c.hostname !== c.name && c.hostname !== c.label ? c.hostname : null,
                     c.oui && c.oui !== c.name ? c.oui : null,
                     c.online ? (c.wired ? 'Wired' : `${c.ap}${c.signal ? ` ${c.signal} dBm` : ''}`) : `Offline, seen ${ago(c.last_seen)}`,
                     c.bytes_last_hour ? `${bytes(c.bytes_last_hour)} last hr` : null,
@@ -169,7 +173,7 @@ export function EditDevice({ client: c, groups: initialGroups, onClose, onSaved 
       <DialogContent>
         <Stack spacing={2} sx={{ pt: 1 }}>
           <Box sx={{ bgcolor: 'action.hover', borderRadius: 3, p: 2 }}>
-            <Typography variant="body2"><b>{c.name}</b>{c.oui && c.oui !== c.name ? ` · ${c.oui}` : ''}</Typography>
+            <Typography variant="body2"><b>{c.name}</b>{c.hostname && c.hostname !== c.name ? ` · ${c.hostname}` : ''}{c.oui && c.oui !== c.name ? ` · ${c.oui}` : ''}</Typography>
             <Typography variant="body2" color="text.secondary">
               {c.mac} · {c.ip || 'no IP'} · {c.online ? (c.wired ? 'wired' : `${c.ap}, ${c.signal} dBm`) : `offline, seen ${ago(c.last_seen)}`}
             </Typography>

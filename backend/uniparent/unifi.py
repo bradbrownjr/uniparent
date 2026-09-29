@@ -27,6 +27,7 @@ class Client:
     last_seen: int | None
     first_seen: int | None
     oui: str
+    hostname: str = ""  # what the device calls itself (DHCP), kept even when UniFi has a name for it
 
 
 class UniFi:
@@ -65,7 +66,7 @@ class UniFi:
             src = s or u
             out[mac] = Client(
                 mac=mac,
-                name=src.get("name") or src.get("hostname") or u.get("name") or u.get("hostname") or u.get("oui") or mac,
+                name=src.get("name") or u.get("name") or src.get("hostname") or u.get("hostname") or u.get("oui") or mac,
                 ip=(s or {}).get("ip") or u.get("last_ip", ""),
                 online=s is not None,
                 wired=bool(src.get("is_wired")),
@@ -76,6 +77,7 @@ class UniFi:
                 last_seen=src.get("last_seen"),
                 first_seen=u.get("first_seen"),
                 oui=u.get("oui", ""),
+                hostname=src.get("hostname") or u.get("hostname") or "",
             )
         for mac, s in live.items():  # associated but not (yet) in rest/user
             if mac.lower() not in out:
@@ -83,7 +85,7 @@ class UniFi:
                                           s.get("ip", ""), True, bool(s.get("is_wired")), False,
                                           aps.get(s.get("ap_mac"), ""), s.get("signal"),
                                           s.get("tx_bytes", 0) + s.get("rx_bytes", 0), s.get("last_seen"),
-                                          s.get("first_seen"), s.get("oui", ""))
+                                          s.get("first_seen"), s.get("oui", ""), s.get("hostname") or "")
         return out
 
     async def block(self, mac: str):

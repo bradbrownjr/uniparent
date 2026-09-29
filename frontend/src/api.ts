@@ -49,6 +49,7 @@ export interface LogEntry { id: number; ts: number; actor: string; action: strin
 export interface ClientRow {
   mac: string
   name: string
+  hostname: string
   oui: string
   ip: string
   online: boolean
