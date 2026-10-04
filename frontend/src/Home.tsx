@@ -80,7 +80,7 @@ export default function Home({ status, reload, isAdmin, go }: {
 
 function GroupCard({ group: g, reload, isAdmin }: { group: Group; reload: () => Promise<void>; isAdmin: boolean }) {
   const notify = useNotify()
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)  // what we're doing, shown on the button until the controller answers
   const off = g.state.off
   const bonus = g.state.reason === 'bonus' && g.state.until !== null
   // Material 3 containers: saturated in light mode, deep tonal containers with light text in dark mode.
@@ -91,7 +91,9 @@ function GroupCard({ group: g, reload, isAdmin }: { group: Group; reload: () => 
   const chipSx = { bgcolor: 'rgba(255,255,255,.18)', color: 'inherit', fontWeight: 500, height: 40, px: 0.5 }
 
   async function act(action: 'on' | 'off' | 'pause' | 'bonus' | 'endbonus', body?: object, msg?: string) {
-    setBusy(true)
+    if (busy) return
+    setBusy(action === 'on' ? 'Turning WiFi on…' : action === 'endbonus' ? 'Locking…' : action === 'bonus' ? 'Adding time…'
+      : 'Turning WiFi off…')
     try {
       const r = await api<{ controller_error: string | null }>(`/api/groups/${g.id}/${action}`, { body: body ?? {} })
       await reload()
@@ -99,9 +101,13 @@ function GroupCard({ group: g, reload, isAdmin }: { group: Group; reload: () => 
     } catch (e) {
       notify((e as Error).message, true)
     } finally {
-      setBusy(false)
+      setBusy(null)
     }
   }
+  const spinner = <CircularProgress size={22} color="inherit" />
+  // Keep the big button readable while disabled: same colours, a spinner and what's happening.
+  const bigSx = { mt: 3, py: 2, fontSize: '1.2rem', bgcolor: 'background.paper', '&:hover': { bgcolor: 'background.paper' },
+    '&.Mui-disabled': { bgcolor: 'background.paper', color: 'text.secondary' } }
 
   return (
     <Card sx={{ bgcolor: cardBg, color: cardFg, transition: 'background-color .3s' }}>
@@ -122,27 +128,25 @@ function GroupCard({ group: g, reload, isAdmin }: { group: Group; reload: () => 
 
         {bonus ? (
           <>
-            <Button fullWidth size="large" variant="contained" disabled={busy}
-              onClick={() => act('endbonus', undefined, `${g.name}'s extra time is over`)} startIcon={<Lock />}
-              sx={{ mt: 3, py: 2, fontSize: '1.2rem', bgcolor: 'background.paper', color: 'error.main',
-                '&:hover': { bgcolor: 'background.paper' } }}>
-              Lock again now
+            <Button fullWidth size="large" variant="contained" disabled={!!busy}
+              onClick={() => act('endbonus', undefined, `${g.name}'s extra time is over`)} startIcon={busy ? spinner : <Lock />}
+              sx={{ ...bigSx, color: 'error.main' }}>
+              {busy ?? 'Lock again now'}
             </Button>
             <Typography variant="body2" sx={{ mt: 2, mb: 1, opacity: 0.9 }}>Add more time:</Typography>
             <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 1 }}>
               {EXTRA.slice(0, 3).map((m) => (
-                <Chip key={m} label={extraLabel(m, true)} disabled={busy} sx={chipSx}
+                <Chip key={m} label={extraLabel(m, true)} disabled={!!busy} sx={chipSx}
                   onClick={() => act('bonus', { minutes: m }, `Added ${extraLabel(m)} for ${g.name}`)} />
               ))}
             </Stack>
           </>
         ) : (
-          <Button fullWidth size="large" variant="contained" disabled={busy}
+          <Button fullWidth size="large" variant="contained" disabled={!!busy}
             onClick={() => off ? act('on', undefined, `${g.name}'s WiFi is on`) : act('off', undefined, `${g.name}'s WiFi is off`)}
-            startIcon={off ? <Wifi /> : <WifiOff />}
-            sx={{ mt: 3, py: 2, fontSize: '1.2rem', bgcolor: 'background.paper', color: off ? 'success.main' : 'error.main',
-              '&:hover': { bgcolor: 'background.paper' } }}>
-            {off ? 'Turn WiFi back on' : 'Turn WiFi off'}
+            startIcon={busy ? spinner : off ? <Wifi /> : <WifiOff />}
+            sx={{ ...bigSx, color: off ? 'success.main' : 'error.main' }}>
+            {busy ?? (off ? 'Turn WiFi back on' : 'Turn WiFi off')}
           </Button>
         )}
 
@@ -151,7 +155,7 @@ function GroupCard({ group: g, reload, isAdmin }: { group: Group; reload: () => 
             <Typography variant="body2" sx={{ mt: 2, mb: 1, opacity: 0.9 }}>Earned more screen time? It locks again after:</Typography>
             <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 1 }}>
               {EXTRA.map((m) => (
-                <Chip key={m} label={extraLabel(m)} disabled={busy} icon={<HourglassTop sx={{ color: 'inherit !important' }} />}
+                <Chip key={m} label={extraLabel(m)} disabled={!!busy} icon={<HourglassTop sx={{ color: 'inherit !important' }} />}
                   sx={chipSx} onClick={() => act('bonus', { minutes: m }, `${g.name} has ${extraLabel(m)} of screen time`)} />
               ))}
             </Stack>
@@ -163,7 +167,7 @@ function GroupCard({ group: g, reload, isAdmin }: { group: Group; reload: () => 
             <Typography variant="body2" sx={{ mt: 2, mb: 1, opacity: 0.9 }}>Or turn it off for a while:</Typography>
             <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 1 }}>
               {PAUSES.map((p) => (
-                <Chip key={p.label} label={p.label} disabled={busy} sx={chipSx}
+                <Chip key={p.label} label={p.label} disabled={!!busy} sx={chipSx}
                   onClick={() => act('pause', p.body(), `${g.name}'s WiFi is off for now`)} />
               ))}
             </Stack>
@@ -202,6 +206,16 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
     } catch (e) { notify((e as Error).message, true) }
   }
 
+  // Switches flip as soon as they're tapped (mac -> WiFi on?) and stay put until the controller has answered.
+  const [flipping, setFlipping] = useState<Record<string, boolean>>({})
+
+  async function toggle(d: Device, on: boolean) {
+    if (d.mac in flipping) return
+    setFlipping((f) => ({ ...f, [d.mac]: on }))
+    await act(d, on ? 'on' : 'off')
+    setFlipping(({ [d.mac]: _, ...rest }) => rest)
+  }
+
   async function act(d: Device, action: 'on' | 'off' | 'hold' | 'pause' | 'bonus' | 'endbonus', body?: object) {
     try {
       await api(`/api/devices/${d.mac}/${action}`, { body: body ?? {} })
@@ -219,8 +233,11 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
         {devices.map((d, i) => {
           // Show what the controller says, not what we asked for: on only once it has really let the device on.
           // Wired devices can't be switched, so never show them as off.
-          const wifiOn = d.wired || (d.known ? !d.blocked : !d.state.off)
-          const warn = (d.state.off !== d.blocked || d.pending) && !d.wired && d.known
+          const flip = flipping[d.mac]
+          const wifiOn = flip ?? (d.wired || (d.known ? !d.blocked : !d.state.off))
+          const busy = flip !== undefined || d.pending
+          const line = flip !== undefined ? (flip ? 'Turning on…' : 'Turning off…') : deviceLine(d)
+          const warn = (d.state.off !== d.blocked || busy) && !d.wired && d.known
           return (
             <Box key={d.mac}>
               {i > 0 && <Divider component="li" variant="inset" />}
@@ -234,7 +251,7 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
                       <KindIcon kind={d.kind} />
                     </Avatar>
                   </ListItemAvatar>
-                  <ListItemText primary={d.label} secondary={deviceLine(d)}
+                  <ListItemText primary={d.label} secondary={line}
                     slotProps={{ secondary: { color: warn ? 'warning.main' : 'text.secondary' } }} />
                   {d.online && wifiOn && d.last_active && Date.now() / 1000 - d.last_active < 600 && (
                     <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: 'success.main', mr: 1, flexShrink: 0 }}
@@ -244,8 +261,8 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
                 {!d.wired && (
                   <Box onClick={(e) => e.stopPropagation()}
                     sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 80, flexShrink: 0 }}>
-                    {d.pending && <CircularProgress size={16} sx={{ mr: 0.5 }} aria-label="Waiting for the controller" />}
-                    <Switch checked={wifiOn} onChange={() => act(d, wifiOn ? 'off' : 'on')}
+                    {busy && <CircularProgress size={16} sx={{ mr: 0.5 }} aria-label="Waiting for the controller" />}
+                    <Switch checked={wifiOn} onChange={() => toggle(d, !wifiOn)}
                       slotProps={{ input: { 'aria-label': `${d.label} WiFi` } }} />
                   </Box>
                 )}
