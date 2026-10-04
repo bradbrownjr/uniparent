@@ -3,8 +3,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from uniparent.rules import (FOREVER, Schedule, active_window, device_state, group_state, next_window_start,
-                             validate_schedule)
+from uniparent.rules import (FOREVER, Schedule, active_window, device_state, group_state, next_morning,
+                             next_window_end, next_window_start, validate_schedule)
 
 TZ = ZoneInfo("America/New_York")
 
@@ -102,3 +102,17 @@ def test_device_precedence():
     assert not device_state(device(), None, now).off
     # an individual off wins over an override
     assert device_state(device(manual_off=1, override_until=FOREVER), off_group, now).off
+
+
+@pytest.mark.parametrize("now,expected", [
+    (ts(2026, 10, 3, 11, 45), ts(2026, 10, 5, 7, 0)),   # Saturday noon: next is Sunday night's bedtime ending Mon 7 AM
+    (ts(2026, 9, 28, 16, 0), ts(2026, 9, 28, 17, 0)),   # during homework: when it ends
+    (ts(2026, 9, 28, 23, 0), ts(2026, 9, 29, 7, 0)),    # during bedtime: next morning
+])
+def test_next_window_end(now, expected):
+    assert next_window_end([SCHOOL_NIGHTS, HOMEWORK], now, TZ) == expected
+
+
+def test_next_morning():
+    assert next_morning(ts(2026, 9, 28, 6, 59), TZ) == ts(2026, 9, 28, 7, 0)
+    assert next_morning(ts(2026, 9, 28, 7, 0), TZ) == ts(2026, 9, 29, 7, 0)

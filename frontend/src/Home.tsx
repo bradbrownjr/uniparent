@@ -6,6 +6,7 @@ import Button from '@mui/material/Button'
 import Card from '@mui/material/Card'
 import CardContent from '@mui/material/CardContent'
 import Chip from '@mui/material/Chip'
+import CircularProgress from '@mui/material/CircularProgress'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
@@ -113,6 +114,9 @@ function GroupCard({ group: g, reload, isAdmin }: { group: Group; reload: () => 
             <Typography variant="h5" sx={{ fontWeight: 700 }}>{g.name}</Typography>
             <Typography sx={{ opacity: 0.9 }}>{stateLine(g.state)}</Typography>
             {bonus && <Typography variant="body2" sx={{ fontWeight: 600 }}>{left(g.state.until!)}</Typography>}
+            {g.devices.some((d) => d.pending) && (
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>Waiting for the WiFi controller to confirm…</Typography>
+            )}
           </Box>
         </Stack>
 
@@ -198,7 +202,7 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
     } catch (e) { notify((e as Error).message, true) }
   }
 
-  async function act(d: Device, action: 'on' | 'off' | 'pause' | 'bonus' | 'endbonus', body?: object) {
+  async function act(d: Device, action: 'on' | 'off' | 'hold' | 'pause' | 'bonus' | 'endbonus', body?: object) {
     try {
       await api(`/api/devices/${d.mac}/${action}`, { body: body ?? {} })
       await reload()
@@ -213,8 +217,10 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
     <>
       <List disablePadding>
         {devices.map((d, i) => {
-          const wifiOn = d.wired || !d.state.off  // wired devices can't be switched, so never show them as off
-          const warn = d.state.off !== d.blocked && !d.wired && d.known
+          // Show what the controller says, not what we asked for: on only once it has really let the device on.
+          // Wired devices can't be switched, so never show them as off.
+          const wifiOn = d.wired || (d.known ? !d.blocked : !d.state.off)
+          const warn = (d.state.off !== d.blocked || d.pending) && !d.wired && d.known
           return (
             <Box key={d.mac}>
               {i > 0 && <Divider component="li" variant="inset" />}
@@ -238,6 +244,7 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
                 {!d.wired && (
                   <Box onClick={(e) => e.stopPropagation()}
                     sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 80, flexShrink: 0 }}>
+                    {d.pending && <CircularProgress size={16} sx={{ mr: 0.5 }} aria-label="Waiting for the controller" />}
                     <Switch checked={wifiOn} onChange={() => act(d, wifiOn ? 'off' : 'on')}
                       slotProps={{ input: { 'aria-label': `${d.label} WiFi` } }} />
                   </Box>
@@ -261,7 +268,14 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
                       <Chip key={p.label} label={p.label} variant="outlined"
                         onClick={() => { act(open, 'pause', p.body()); setOpen(null) }} />
                     ))}
+                    <Chip label="Until I turn it back on" variant="outlined"
+                      onClick={() => { act(open, 'hold'); setOpen(null) }} />
                   </Stack>
+                  {!open.state.off && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      The switch turns it off until WiFi next comes back on by schedule, or 7 AM.
+                    </Typography>
+                  )}
                   {(open.state.off || open.state.reason === 'bonus') && (
                     <>
                       <Typography variant="body2" sx={{ mt: 2.5, mb: 1 }}>

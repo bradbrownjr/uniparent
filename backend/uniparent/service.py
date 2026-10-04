@@ -6,7 +6,8 @@ from datetime import datetime
 
 from .config import Settings
 from .db import DB
-from .rules import FOREVER, Schedule, State, active_window, device_state, group_state, next_window_start
+from .rules import (FOREVER, Schedule, State, active_window, device_state, group_state, next_morning,
+                    next_window_end, next_window_start)
 from .unifi import Client, UniFi, UniFiError
 
 log = logging.getLogger("uniparent")
@@ -63,15 +64,23 @@ class Service:
 
     # ---- enforcement ---------------------------------------------------------------------------
 
+    # Seconds after letting a device back on before each nudge (block + unblock, like toggling it by hand).
+    NUDGE_AFTER = (180, 600)
+    NUDGE_GAP = 5      # seconds between the block and the unblock of a nudge
+    LATE = 120         # a change confirmed later than this gets an Activity entry saying so
+
     async def reconcile(self, now: int | None = None, force: set[str] | None = None) -> None:
-        """Push rule changes to the controller, and tidy expired timers.
+        """Push rule changes to the controller, confirm them, and tidy expired timers.
 
         Edge-triggered: a device is only blocked/unblocked when what UniParent wants for it changes
-        (button press, schedule start/end, pause running out) — `devices.applied_off` remembers the last
-        thing we sent. Between changes, whatever someone sets in the UniFi app is left alone. MACs in
-        `force` (an explicit button press here) are pushed even if our intent didn't change.
+        (button press, schedule start/end, pause running out) — `devices.applied_off` remembers that intent.
+        Each change stays pending (`pending_since`) and is re-sent every pass until reading the controller
+        back shows it took; that survives the controller being down or restarting. Once confirmed, whatever
+        someone sets in the UniFi app is left alone. MACs in `force` (an explicit button press here) are
+        pushed even if our intent didn't change.
         """
         force = force or set()
+        nudge: list[str] = []
         async with self._lock:
             now = now or int(time.time())
             self._expire(now)
@@ -82,63 +91,140 @@ class Service:
                     self.db.x("UPDATE devices SET override_until=NULL WHERE group_id=? AND override_until IS NOT NULL",
                               (gid,))
             devices = self.device_states(now, groups)
-            self._log_transitions(groups, devices)
-
             clients = await self.refresh_clients(max_age=0)
+            self._log_transitions(groups, devices, reachable=not self.last_error)
             if self.last_error:
+                # Intent changes stay unapplied (applied_off untouched), so the next pass retries; note when
+                # they started waiting so the eventual confirmation can say how late it was.
+                for mac, st in devices.items():
+                    self.db.x("UPDATE devices SET pending_since=? WHERE mac=? AND pending_since IS NULL "
+                              "AND applied_off IS NOT NULL AND applied_off != ?", (now, mac, int(st.off)))
                 return
-            applied = {d["mac"]: d["applied_off"] for d in self.db.q("SELECT mac, applied_off FROM devices")}
+            rows = {r["mac"]: r for r in self.db.q("SELECT * FROM devices")}
+            sent = False
             for mac, st in devices.items():
                 c = clients.get(mac)
                 if c is None or c.wired:
                     continue  # unknown to the controller yet, or wired (no UniFi gateway to block it)
-                prev = applied.get(mac)
+                r = rows[mac]
+                prev = r["applied_off"]
                 if mac not in force:
-                    if prev is not None and bool(prev) == st.off:
-                        continue  # nothing changed on our side; respect any edits made in the UniFi app
                     if prev is None and not st.off:
                         # Newly managed and should be on: don't undo a block someone set in the UniFi app.
                         self.db.x("UPDATE devices SET applied_off=0 WHERE mac=?", (mac,))
                         continue
-                try:
+                    if prev is not None and bool(prev) == st.off and r["pending_since"] is None:
+                        continue  # confirmed and nothing changed on our side; respect edits in the UniFi app
+                if prev is None or bool(prev) != st.off or mac in force:
+                    # New intent: remember it as pending until the controller shows it.
+                    self.db.x("UPDATE devices SET applied_off=?, pending_since=COALESCE(pending_since, ?) WHERE mac=?",
+                              (int(st.off), now, mac))
                     if st.off and not c.blocked:
-                        await self.unifi.block(mac)
-                        c.blocked = True
+                        self.db.x("UPDATE devices SET online_at_block=?, unblocked_at=NULL, nudges=0 WHERE mac=?",
+                                  (int(c.online), mac))
                     elif not st.off and c.blocked:
-                        await self.unifi.unblock(mac)
-                        c.blocked = False
-                    self.db.x("UPDATE devices SET applied_off=? WHERE mac=?", (int(st.off), mac))
-                    self.clients_at = 0  # the device is (dis)connecting: next status read should be fresh
-                except UniFiError as e:  # not recorded as applied, so the next pass retries
+                        self.db.x("UPDATE devices SET unblocked_at=?, nudges=0 WHERE mac=?", (now, mac))
+                if st.off == c.blocked:
+                    continue
+                try:
+                    await (self.unifi.block(mac) if st.off else self.unifi.unblock(mac))
+                    sent = True
+                except UniFiError as e:  # still pending, so the next pass retries
                     self.last_error = str(e)
                     log.warning("could not update %s: %s", mac, e)
+            if sent:
+                clients = await self.refresh_clients(max_age=0)  # read back what the controller now says
+                if self.last_error:
+                    return
+            nudge = self._confirm_and_watch(now, devices, clients)
+        for mac in nudge:
+            await self._nudge(mac)
+
+    def _confirm_and_watch(self, now: int, devices: dict[str, State], clients: dict[str, Client]) -> list[str]:
+        """Clear pending changes the controller now shows, and watch let-back-on devices rejoin WiFi.
+
+        Returns devices due a nudge: ones that were connected when we blocked them (so they're likely at
+        home, not at a friend's) and haven't come back. At most len(NUDGE_AFTER) nudges, one log line each time.
+        """
+        due = []
+        for r in self.db.q("SELECT * FROM devices WHERE pending_since IS NOT NULL OR unblocked_at IS NOT NULL"):
+            mac, st, c = r["mac"], devices.get(r["mac"]), clients.get(r["mac"])
+            if st is None or c is None or c.wired:
+                continue
+            if r["pending_since"] is not None and c.blocked == bool(r["applied_off"]):
+                self.db.x("UPDATE devices SET pending_since=NULL WHERE mac=?", (mac,))
+                late = now - r["pending_since"]
+                if late > self.LATE:
+                    self.db.log("System", f"Controller finally took the change, {round(late / 60)} min late "
+                                          f"— WiFi {'off' if r['applied_off'] else 'on'}", r["label"])
+            since = r["unblocked_at"]
+            if since is None:
+                continue
+            if st.off or c.blocked:
+                self.db.x("UPDATE devices SET unblocked_at=NULL, nudges=0 WHERE mac=?", (mac,))
+            elif c.online:
+                self.db.x("UPDATE devices SET unblocked_at=NULL, nudges=0 WHERE mac=?", (mac,))
+                if r["nudges"]:
+                    self.db.log("System", "Back on WiFi after a nudge", r["label"])
+            elif not r["online_at_block"]:
+                if now - since > self.NUDGE_AFTER[-1]:  # wasn't here at bedtime: just stop waiting
+                    self.db.x("UPDATE devices SET unblocked_at=NULL WHERE mac=?", (mac,))
+            elif r["nudges"] < len(self.NUDGE_AFTER):
+                if now - since >= self.NUDGE_AFTER[r["nudges"]]:
+                    self.db.x("UPDATE devices SET nudges=nudges+1 WHERE mac=?", (mac,))
+                    due.append(mac)
+            elif now - since >= self.NUDGE_AFTER[-1] + 180:
+                self.db.x("UPDATE devices SET unblocked_at=NULL WHERE mac=?", (mac,))
+                self.db.log("System", f"Didn't rejoin WiFi even after {r['nudges']} nudges "
+                                      "— may be switched off or away from home", r["label"])
+        return due
+
+    async def _nudge(self, mac: str) -> None:
+        """Block then unblock a device that hasn't rejoined: the same kick as toggling it off and on by hand."""
+        async with self._lock:
+            d = self.db.one("SELECT applied_off FROM devices WHERE mac=?", (mac,))
+            if d is None or d["applied_off"]:
+                return  # turned off meanwhile
+            # Pending first: if anything fails between the two calls, the background loop finishes the unblock.
+            self.db.x("UPDATE devices SET pending_since=? WHERE mac=?", (int(time.time()), mac))
+            try:
+                await self.unifi.block(mac)
+                await asyncio.sleep(self.NUDGE_GAP)
+                await self.unifi.unblock(mac)
+                self.db.x("UPDATE devices SET pending_since=NULL WHERE mac=?", (mac,))
+                log.info("nudged %s", mac)
+            except UniFiError as e:
+                self.last_error = str(e)
+                log.warning("could not nudge %s: %s", mac, e)
+            self.clients_at = 0
 
     def _expire(self, now: int):
         for table in ("groups", "devices"):
             for col in ("pause_until", "override_until", "bonus_until"):
                 self.db.x(f"UPDATE {table} SET {col}=NULL WHERE {col} IS NOT NULL AND {col}<=?", (now,))
 
-    def _log_transitions(self, groups: dict[int, State], devices: dict[str, State]):
+    def _log_transitions(self, groups: dict[int, State], devices: dict[str, State], reachable: bool = True):
         """Log changes nobody pressed a button for: schedules starting/ending, pauses running out."""
+        tail = "" if reachable else " — controller not answering, will keep trying"
         names = {g["id"]: g["name"] for g in self.db.q("SELECT id, name FROM groups")}
         for gid, st in groups.items():
             prev = self._last_group.get(gid)
             if prev is not None and prev.off != st.off:
                 if st.off and prev.reason == "bonus":
-                    self.db.log("Timer", "Extra time is up — WiFi off", names[gid])
+                    self.db.log("Timer", "Extra time is up — WiFi off" + tail, names[gid])
                 elif st.off and st.reason == "schedule":
-                    self.db.log("Schedule", f"WiFi off{' — ' + st.detail if st.detail else ''}", names[gid])
+                    self.db.log("Schedule", f"WiFi off{' — ' + st.detail if st.detail else ''}{tail}", names[gid])
                 elif not st.off:
                     self.db.log("Schedule" if prev.reason == "schedule" else "Timer",
-                                "WiFi back on", names[gid])
+                                "WiFi back on" + tail, names[gid])
             self._last_group[gid] = st
         labels = {d["mac"]: d["label"] for d in self.db.q("SELECT mac, label FROM devices")}
         for mac, st in devices.items():
             prev = self._last_device.get(mac)
             if prev is not None and prev.off and not st.off and prev.reason == "pause":
-                self.db.log("Timer", "WiFi back on", labels[mac])
+                self.db.log("Timer", "WiFi back on" + tail, labels[mac])
             elif prev is not None and not prev.off and st.off and prev.reason == "bonus":
-                self.db.log("Timer", "Extra time is up — WiFi off", labels[mac])
+                self.db.log("Timer", "Extra time is up — WiFi off" + tail, labels[mac])
             self._last_device[mac] = st
         for gone in set(self._last_device) - set(devices):
             del self._last_device[gone]
@@ -221,8 +307,14 @@ class Service:
             return
         self.db.x("UPDATE devices SET bonus_until=NULL WHERE mac=?", (mac,))
         if action == "off":
+            # Just this device: off until the child's WiFi next comes back by schedule (or 7 AM), so a
+            # forgotten or mis-tapped switch can't leave it off for days. "hold" is the until-I-say-so version.
+            until = self.next_on(d["group_id"], now)
+            self.db.x("UPDATE devices SET manual_off=0, pause_until=?, override_until=NULL WHERE mac=?", (until, mac))
+            what = f"Turned WiFi off until {self.fmt(until)}"
+        elif action == "hold":
             self.db.x("UPDATE devices SET manual_off=1, pause_until=NULL, override_until=NULL WHERE mac=?", (mac,))
-            what = "Turned WiFi off"
+            what = "Turned WiFi off until turned back on"
         elif action == "pause":
             if not until or until <= now:
                 raise ValueError("pause needs a future time")
@@ -301,6 +393,11 @@ class Service:
         d = datetime.fromtimestamp(ts, self.s.tz)
         same_day = d.date() == datetime.now(self.s.tz).date()
         return d.strftime("%-I:%M %p" if same_day else "%a %-I:%M %p")
+
+    def next_on(self, gid: int | None, now: int) -> int:
+        """When a device switched off by itself comes back: next schedule end for its child, else 7 AM."""
+        end = next_window_end(self.schedules(gid), now, self.s.tz) if gid else None
+        return end or next_morning(now, self.s.tz)
 
     def next_off(self, gid: int, now: int) -> tuple[int, str] | None:
         n = next_window_start(self.schedules(gid), now, self.s.tz)

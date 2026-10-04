@@ -93,6 +93,32 @@ def next_window_start(schedules: list[Schedule], now: int, tz: ZoneInfo) -> tupl
     return best
 
 
+def next_window_end(schedules: list[Schedule], now: int, tz: ZoneInfo) -> int | None:
+    """Next time a schedule window ends strictly after `now` (the running one included), a week ahead."""
+    local = datetime.fromtimestamp(now, tz)
+    best = None
+    for s in schedules:
+        if not s.enabled:
+            continue
+        for ahead in range(-1, 8):
+            day = local + timedelta(days=ahead)
+            if str(day.weekday()) not in s.days:
+                continue
+            _, end = _window_on(day, s, tz)
+            ts = int(end.timestamp())
+            if ts > now and (best is None or ts < best):
+                best = ts
+    return best
+
+
+def next_morning(now: int, tz: ZoneInfo, hour: int = 7) -> int:
+    local = datetime.fromtimestamp(now, tz)
+    m = datetime.combine(local.date(), dtime(hour), tz)
+    if m <= local:
+        m = datetime.combine(local.date() + timedelta(days=1), dtime(hour), tz)
+    return int(m.timestamp())
+
+
 def _live(ts: int | None, now: int) -> bool:
     return ts is not None and ts > now
 

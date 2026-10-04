@@ -36,7 +36,11 @@ CREATE TABLE IF NOT EXISTS devices (
     override_until INTEGER,           -- on until this time even while its group is off
     applied_off    INTEGER,           -- last block state UniParent pushed (NULL = never); see Service.reconcile
     bonus_until    INTEGER,           -- extra screen time for just this device
-    notes          TEXT NOT NULL DEFAULT ''
+    notes          TEXT NOT NULL DEFAULT '',
+    pending_since  INTEGER,           -- applied_off not yet confirmed by reading the controller back (NULL = confirmed)
+    unblocked_at   INTEGER,           -- we let it back on and are waiting for it to rejoin WiFi (NULL = not waiting)
+    nudges         INTEGER NOT NULL DEFAULT 0,  -- block/unblock kicks sent since unblocked_at
+    online_at_block INTEGER           -- 1 if it was connected when we blocked it: only those get nudged
 );
 CREATE TABLE IF NOT EXISTS schedules (
     id       INTEGER PRIMARY KEY,
@@ -75,6 +79,10 @@ MIGRATIONS = [
     ("devices", "applied_off", "INTEGER"),
     ("groups", "bonus_until", "INTEGER"),
     ("devices", "bonus_until", "INTEGER"),
+    ("devices", "pending_since", "INTEGER"),
+    ("devices", "unblocked_at", "INTEGER"),
+    ("devices", "nudges", "INTEGER NOT NULL DEFAULT 0"),
+    ("devices", "online_at_block", "INTEGER"),
 ]
 
 

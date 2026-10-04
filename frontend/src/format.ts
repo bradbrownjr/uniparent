@@ -70,19 +70,19 @@ export function stateLine(st: State): string {
   }
 }
 
-/** Short status for a device row; flags when the UniFi app disagrees with UniParent. */
+/** Short status for a device row: what the controller actually shows, and when it disagrees with UniParent. */
 export function deviceLine(d: Device): string {
   if (d.wired) return "Wired — can't be switched off here"
   if (!d.known) return 'Not seen on the network yet'
+  if (d.pending) return d.state.off ? 'Turning off…' : 'Turning on…'
   if (d.state.off && !d.blocked) return 'Allowed in the UniFi app'
   if (!d.state.off && d.blocked) return 'Blocked in the UniFi app'
   if (d.state.reason === 'bonus' && d.state.until) return `Extra time · locks again at ${when(d.state.until)}`
-  if (d.state.off) return d.state.reason === 'pause' && d.state.until ? `Paused until ${when(d.state.until)}` : 'WiFi off'
-  if (!d.online) {
-    // Just allowed back on: devices take a few seconds to rejoin WiFi.
-    if (d.last_seen && Date.now() / 1000 - d.last_seen < 120) return 'Reconnecting…'
-    return `Offline · seen ${ago(d.last_seen)}`
+  if (d.state.off) {
+    if (d.state.reason === 'manual') return 'Off until you turn it back on'
+    return d.state.until ? `Off until ${when(d.state.until)}` : 'WiFi off'
   }
+  if (!d.online) return d.waiting ? 'WiFi on · waiting for it to rejoin…' : `Offline · seen ${ago(d.last_seen)}`
   const act = !d.last_active ? 'Idle'
     : Date.now() / 1000 - d.last_active < 600 ? 'Active now' : `Active ${ago(d.last_active)}`
   return d.ap ? `${act} · ${d.ap}` : act

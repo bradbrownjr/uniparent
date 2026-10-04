@@ -20,6 +20,7 @@ class FakeUniFi:
     def __init__(self):
         self.calls: list[tuple[str, str]] = []
         self.down = False
+        self.ignore = False  # accept commands but don't apply them (seen after controller restarts)
         self.c = {
             KID_PHONE: Client(KID_PHONE, "Galaxy-A15", "192.0.2.10", True, False, False, "Upstairs", -55,
                               1_000_000, 0, 0, "Samsung"),
@@ -38,11 +39,14 @@ class FakeUniFi:
 
     async def block(self, mac):
         self.calls.append(("block", mac))
-        self.c[mac].blocked = True
+        if not self.ignore:
+            self.c[mac].blocked = True
+            self.c[mac].online = False  # dropped off WiFi
 
     async def unblock(self, mac):
         self.calls.append(("unblock", mac))
-        self.c[mac].blocked = False
+        if not self.ignore:
+            self.c[mac].blocked = False  # allowed back; the device rejoins on its own (tests set online)
 
     async def close(self):
         pass
@@ -61,6 +65,7 @@ def app(tmp_path, fake):
     s = Settings(db_path=str(tmp_path / "t.db"), background=False, cookie_secure=False,
                  static_dir=str(tmp_path / "nostatic"))
     a = create_app(s, fake)
+    a.state.svc.NUDGE_GAP = 0
     auth.create_user(a.state.db, "brad", "Brad", "correct horse", "admin")
     auth.create_user(a.state.db, "amy", "Amy", "battery staple", "parent")
     return a

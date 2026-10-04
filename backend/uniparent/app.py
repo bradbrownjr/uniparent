@@ -18,7 +18,7 @@ from .service import Service, norm_mac
 from .unifi import UniFi
 
 # pause: {minutes} or {until}; bonus (extra screen time, locks again after): {minutes}
-ACTIONS = ("on", "off", "pause", "bonus", "endbonus")
+ACTIONS = ("on", "off", "hold", "pause", "bonus", "endbonus")  # hold: devices only, off until turned on
 KINDS = ("phone", "tablet", "laptop", "computer", "tv", "console", "watch", "speaker", "other")
 
 
@@ -171,6 +171,8 @@ def create_app(settings: Settings | None = None, unifi: UniFi | None = None) -> 
             "known": c is not None, "ap": c.ap if c else "", "signal": c.signal if c else None,
             "ip": c.ip if c else "", "last_active": active.get(d["mac"]),
             "last_seen": c.last_seen if c else None,
+            # Our last change isn't confirmed on the controller yet / let back on, waiting for it to rejoin WiFi.
+            "pending": d["pending_since"] is not None, "waiting": d["unblocked_at"] is not None,
         }
 
     @app.get("/api/status")

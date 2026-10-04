@@ -238,3 +238,98 @@ def test_traffic_and_last_active(app, admin, kid, fake):
     asyncio.run(svc.poll_traffic(1120))
     assert svc.last_active() == {KID_PHONE: 1060}
     assert [r["bytes"] for r in svc.traffic(KID_TABLET, 0)] == [10, 50]
+
+
+# ---- confirming changes and getting devices back on WiFi -------------------------------------------
+
+def run(app, now=None):
+    import asyncio
+    asyncio.run(app.state.svc.reconcile(now))
+
+
+def test_change_stays_pending_until_controller_shows_it(app, parent, kid, fake):
+    fake.ignore = True                    # controller says ok but doesn't apply it
+    parent.post(f"/api/groups/{kid}/off", headers=H)
+    d = devs(parent)[KID_PHONE]
+    assert d["pending"] and not d["blocked"], "UI must not claim it's off until the controller agrees"
+    fake.calls.clear()
+    run(app)
+    assert ("block", KID_PHONE) in fake.calls, "unconfirmed changes are re-sent every pass"
+    fake.ignore = False
+    run(app)
+    d = devs(parent)[KID_PHONE]
+    assert d["blocked"] and not d["pending"]
+    fake.calls.clear()
+    fake.c[KID_PHONE].blocked = False     # once confirmed, a UniFi app change is still respected
+    run(app)
+    assert fake.calls == []
+
+
+def test_outage_over_schedule_end_is_applied_and_logged_late(app, parent, kid, fake):
+    until = int(time.time()) + 600
+    parent.post(f"/api/groups/{kid}/pause", json={"until": until}, headers=H)
+    fake.down = True
+    run(app, until + 1)                   # pause ends while the controller is down
+    log = parent.get("/api/log").json()
+    assert log[0]["action"] == "WiFi back on — controller not answering, will keep trying"
+    fake.down = False
+    run(app, until + 30 * 60)
+    assert not fake.c[KID_PHONE].blocked
+    assert any("30 min late" in e["action"] for e in parent.get("/api/log").json())
+
+
+def test_nudge_device_that_does_not_rejoin(app, parent, kid, fake):
+    until = int(time.time()) + 600
+    parent.post(f"/api/groups/{kid}/pause", json={"until": until}, headers=H)  # phone was online at block
+    run(app, until + 1)
+    assert not fake.c[KID_PHONE].blocked and devs(parent)[KID_PHONE]["waiting"]
+    fake.calls.clear()
+    run(app, until + 60)
+    assert fake.calls == [], "give it a few minutes on its own first"
+    run(app, until + 200)
+    assert [c for c in fake.calls if c[1] == KID_PHONE] == [("block", KID_PHONE), ("unblock", KID_PHONE)]
+    assert not fake.c[KID_PHONE].blocked
+    fake.c[KID_PHONE].online = True       # the kick worked
+    run(app, until + 230)
+    assert parent.get("/api/log").json()[0]["action"] == "Back on WiFi after a nudge"
+    assert not devs(parent)[KID_PHONE]["waiting"]
+
+
+def test_nudges_are_capped_with_one_log_line(app, parent, kid, fake):
+    until = int(time.time()) + 600
+    parent.post(f"/api/groups/{kid}/pause", json={"until": until}, headers=H)
+    run(app, until + 1)
+    before = len(parent.get("/api/log").json())
+    fake.calls.clear()
+    for t in range(30, 3600, 30):         # an hour of background passes, phone never comes back
+        run(app, until + t)
+    assert fake.calls.count(("block", KID_PHONE)) == 2
+    log = parent.get("/api/log").json()
+    phone = [e for e in log[:len(log) - before] if e["target"] == "Riley's phone"]
+    assert len(phone) == 1 and "even after 2 nudges" in phone[0]["action"]
+    assert not fake.c[KID_PHONE].blocked
+
+
+def test_no_nudge_for_device_away_at_bedtime(app, parent, kid, fake):
+    fake.c[KID_PHONE].online = False      # at a sleepover: not on our WiFi when it was blocked
+    until = int(time.time()) + 600
+    parent.post(f"/api/groups/{kid}/pause", json={"until": until}, headers=H)
+    run(app, until + 1)
+    fake.calls.clear()
+    before = len(parent.get("/api/log").json())
+    for t in range(30, 3600, 30):
+        run(app, until + t)
+    assert ("block", KID_PHONE) not in fake.calls
+    log = parent.get("/api/log").json()
+    assert not [e for e in log[:len(log) - before] if e["target"] == "Riley's phone"]
+
+
+def test_device_switch_off_is_timed_hold_is_not(admin, parent, kid, fake, app):
+    parent.post(f"/api/devices/{KID_PHONE}/off", headers=H)
+    st = devs(parent)[KID_PHONE]["state"]
+    assert st["reason"] == "pause" and st["until"] is not None, "a lone device off must come back by itself"
+    assert fake.c[KID_PHONE].blocked
+    parent.post(f"/api/devices/{KID_TABLET}/hold", headers=H)
+    st = devs(parent)[KID_TABLET]["state"]
+    assert st["reason"] == "manual" and st["until"] is None
+    assert parent.post(f"/api/groups/{kid}/hold", headers=H).status_code == 400

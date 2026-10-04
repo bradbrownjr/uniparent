@@ -26,6 +26,8 @@ export interface Device {
   ip: string
   last_active: number | null
   last_seen: number | null
+  pending: boolean   // our last change isn't confirmed on the controller yet
+  waiting: boolean   // let back on; waiting for it to rejoin WiFi
 }
 
 export interface Group {
