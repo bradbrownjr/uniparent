@@ -12,7 +12,6 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import Divider from '@mui/material/Divider'
 import List from '@mui/material/List'
-import ListItem from '@mui/material/ListItem'
 import ListItemAvatar from '@mui/material/ListItemAvatar'
 import ListItemButton from '@mui/material/ListItemButton'
 import ListItemText from '@mui/material/ListItemText'
@@ -219,12 +218,10 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
           return (
             <Box key={d.mac}>
               {i > 0 && <Divider component="li" variant="inset" />}
-              <ListItem disablePadding secondaryAction={d.wired ? undefined :
-                <Switch edge="end" checked={wifiOn}
-                  onChange={() => act(d, wifiOn ? 'off' : 'on')}
-                  slotProps={{ input: { 'aria-label': `${d.label} WiFi` } }} />
-              }>
-                <ListItemButton onClick={() => setOpen(d)} sx={{ py: 1.5 }}>
+              {/* Row button and switch are siblings (not nested): the switch gets its own full-height tap target
+                  so a slightly-off tap toggles instead of opening the details dialog. */}
+              <Stack direction="row" sx={{ alignItems: 'stretch' }}>
+                <ListItemButton onClick={() => setOpen(d)} sx={{ py: 1.5, flex: 1, minWidth: 0 }}>
                   <ListItemAvatar>
                     <Avatar sx={{ bgcolor: wifiOn ? 'primary.main' : 'action.disabledBackground',
                       color: wifiOn ? 'primary.contrastText' : 'text.secondary' }}>
@@ -234,11 +231,18 @@ function DeviceList({ devices, reload, groupOff = false, isAdmin }: {
                   <ListItemText primary={d.label} secondary={deviceLine(d)}
                     slotProps={{ secondary: { color: warn ? 'warning.main' : 'text.secondary' } }} />
                   {d.online && wifiOn && d.last_active && Date.now() / 1000 - d.last_active < 600 && (
-                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: 'success.main', mr: 2, flexShrink: 0 }}
+                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: 'success.main', mr: 1, flexShrink: 0 }}
                       title="Active in the last 10 minutes" />
                   )}
                 </ListItemButton>
-              </ListItem>
+                {!d.wired && (
+                  <Box onClick={(e) => e.stopPropagation()}
+                    sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 80, flexShrink: 0 }}>
+                    <Switch checked={wifiOn} onChange={() => act(d, wifiOn ? 'off' : 'on')}
+                      slotProps={{ input: { 'aria-label': `${d.label} WiFi` } }} />
+                  </Box>
+                )}
+              </Stack>
             </Box>
           )
         })}
