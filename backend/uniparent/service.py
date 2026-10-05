@@ -33,6 +33,10 @@ class Service:
         self._lock = asyncio.Lock()
         self._last_group: dict[int, State] = {}
         self._last_device: dict[str, State] = {}
+        self._reblock: dict[str, int] = {}   # mac -> when to send the follow-up block (REBLOCK_AFTER)
+        self._kicked: dict[str, int] = {}    # mac -> last re-kick, for REKICK_EVERY
+        self._hidden_passes = 0              # passes in a row an AP reported stations the controller hides
+        self._kick_check: tuple[int, list[str]] | None = None  # (hidden count, macs) at the last re-kick
 
     # ---- reads -------------------------------------------------------------------------------
 
@@ -68,6 +72,8 @@ class Service:
     NUDGE_AFTER = (180, 600)
     NUDGE_GAP = 5      # seconds between the block and the unblock of a nudge
     LATE = 120         # a change confirmed later than this gets an Activity entry saying so
+    REBLOCK_AFTER = 120  # one follow-up block this long after the first, for a device that slipped straight back on
+    REKICK_EVERY = 300   # at most this often per device while an AP reports a station the controller hides
 
     async def reconcile(self, now: int | None = None, force: set[str] | None = None) -> None:
         """Push rule changes to the controller, confirm them, and tidy expired timers.
@@ -129,6 +135,8 @@ class Service:
                 try:
                     await (self.unifi.block(mac) if st.off else self.unifi.unblock(mac))
                     sent = True
+                    if st.off:
+                        self._reblock[mac] = now + self.REBLOCK_AFTER
                 except UniFiError as e:  # still pending, so the next pass retries
                     self.last_error = str(e)
                     log.warning("could not update %s: %s", mac, e)
@@ -137,8 +145,50 @@ class Service:
                 if self.last_error:
                     return
             nudge = self._confirm_and_watch(now, devices, clients)
+            await self._rekick(now, devices, clients)
         for mac in nudge:
             await self._nudge(mac)
+
+    async def _rekick(self, now: int, devices: dict[str, State], clients: dict[str, Client]) -> None:
+        """Block devices that should be off again, in case one got back on WiFi anyway.
+
+        The APs enforce a block, but now and then a device rejoins within a couple of minutes of being
+        kicked (seen with a Switch, through the other AP). The controller then leaves it out of its client
+        list, reports it blocked, and never kicks it again. Two triggers: one follow-up block REBLOCK_AFTER
+        the first, and an AP reporting more stations than the controller lists two passes in a row (we can't
+        tell which device it is, so every off device gets kicked). block-sta on a device that isn't
+        connected does nothing, so a wrong guess is harmless; it's only logged when a hidden station goes away.
+        """
+        hidden = sum(self.unifi.hidden.values())
+        if self._kick_check:
+            before, macs = self._kick_check
+            self._kick_check = None
+            if hidden < before:
+                labels = [r["label"] for r in self.db.q(
+                    f"SELECT label FROM devices WHERE mac IN ({','.join('?' * len(macs))}) ORDER BY label", macs)]
+                self.db.log("System", "Got back on WiFi while off — kicked off again" if len(labels) == 1 else
+                            "One of these got back on WiFi while off — kicked off again", ", ".join(labels))
+        self._hidden_passes = self._hidden_passes + 1 if hidden else 0
+        off = {mac for mac, st in devices.items()
+               if st.off and (c := clients.get(mac)) is not None and c.blocked and not c.wired}
+        self._reblock = {m: t for m, t in self._reblock.items() if devices.get(m) and devices[m].off}
+        rekick = {m for m in off if now - self._kicked.get(m, 0) >= self.REKICK_EVERY} \
+            if self._hidden_passes >= 2 else set()
+        kicked = []
+        for mac in sorted(rekick | {m for m in off if self._reblock.get(m, now + 1) <= now}):
+            try:
+                await self.unifi.block(mac)
+            except UniFiError as e:  # try again next pass
+                log.warning("could not re-kick %s: %s", mac, e)
+                continue
+            kicked.append(mac)
+            self._reblock.pop(mac, None)
+            if mac in rekick:
+                self._kicked[mac] = now
+        if kicked:
+            log.info("re-kicked %s (%d hidden station(s))", ", ".join(kicked), hidden)
+            self._kick_check = (hidden, kicked)
+            self.clients_at = 0
 
     def _confirm_and_watch(self, now: int, devices: dict[str, State], clients: dict[str, Client]) -> list[str]:
         """Clear pending changes the controller now shows, and watch let-back-on devices rejoin WiFi.

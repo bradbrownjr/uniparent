@@ -21,6 +21,7 @@ class FakeUniFi:
         self.calls: list[tuple[str, str]] = []
         self.down = False
         self.ignore = False  # accept commands but don't apply them (seen after controller restarts)
+        self.hidden: dict[str, int] = {}  # AP name -> stations it has that the controller doesn't list
         self.c = {
             KID_PHONE: Client(KID_PHONE, "Galaxy-A15", "192.0.2.10", True, False, False, "Upstairs", -55,
                               1_000_000, 0, 0, "Samsung"),

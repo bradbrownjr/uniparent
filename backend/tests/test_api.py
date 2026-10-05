@@ -333,3 +333,62 @@ def test_device_switch_off_is_timed_hold_is_not(admin, parent, kid, fake, app):
     st = devs(parent)[KID_TABLET]["state"]
     assert st["reason"] == "manual" and st["until"] is None
     assert parent.post(f"/api/groups/{kid}/hold", headers=H).status_code == 400
+
+
+def test_follow_up_block_after_two_minutes(app, parent, kid, fake):
+    t = int(time.time())
+    parent.post(f"/api/groups/{kid}/pause", json={"until": t + 3600}, headers=H)
+    run(app, t)
+    fake.calls.clear()
+    run(app, t + 60)
+    assert fake.calls == []
+    run(app, t + 150)                     # closes the gap a device can slip back on through
+    assert sorted(fake.calls) == [("block", KID_PHONE), ("block", KID_TABLET)]
+    fake.calls.clear()
+    for s in range(180, 1800, 30):
+        run(app, t + s)
+    assert fake.calls == [], "just the one follow-up"
+    assert "kicked" not in parent.get("/api/log").json()[0]["action"]
+
+
+def test_rekick_when_an_ap_hides_a_station(app, parent, kid, fake):
+    t = int(time.time())
+    parent.post(f"/api/devices/{KID_PHONE}/off", json={"until": t + 3600}, headers=H)
+    run(app, t + 150)                     # follow-up block done
+    fake.calls.clear()
+    fake.hidden = {"Upstairs": 1}         # the phone got back on; the controller still lists it blocked + offline
+    run(app, t + 180)
+    assert fake.calls == [], "one odd count could be a roam in progress"
+    run(app, t + 210)
+    assert fake.calls == [("block", KID_PHONE)]
+    fake.hidden = {}                      # the kick took it off
+    run(app, t + 240)
+    e = parent.get("/api/log").json()[0]
+    assert e["action"] == "Got back on WiFi while off — kicked off again" and e["target"] == "Riley's phone"
+
+
+def test_rekick_is_rate_limited_and_quiet_when_hidden_station_is_not_ours(app, parent, kid, fake):
+    t = int(time.time())
+    parent.post(f"/api/groups/{kid}/pause", json={"until": t + 3600}, headers=H)
+    run(app, t + 150)
+    before = len(parent.get("/api/log").json())
+    fake.calls.clear()
+    fake.hidden = {"Downstairs": 1}       # something someone blocked in the UniFi app, say
+    for s in range(180, 1080, 30):
+        run(app, t + s)
+    assert fake.calls.count(("block", KID_PHONE)) == 3 and fake.calls.count(("block", KID_TABLET)) == 3
+    assert ("block", KID_TV) not in fake.calls  # wired
+    assert len(parent.get("/api/log").json()) == before
+
+
+def test_no_rekick_once_back_on(app, parent, kid, fake):
+    t = int(time.time())
+    parent.post(f"/api/groups/{kid}/pause", json={"until": t + 60}, headers=H)
+    run(app, t + 90)                      # pause over before the follow-up was due
+    fake.calls.clear()
+    fake.hidden = {"Upstairs": 1}
+    for s in range(120, 600, 30):
+        run(app, t + s)
+    for mac in (KID_PHONE, KID_TABLET):   # only nudges (block + unblock), never a re-kick
+        assert fake.calls.count(("block", mac)) == fake.calls.count(("unblock", mac)), fake.calls
+        assert not fake.c[mac].blocked

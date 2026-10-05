@@ -2,7 +2,8 @@
 
 Uses the legacy `/api/s/<site>/...` endpoints because the official integration API has no
 block/unblock action. Verified on Network 10.6: `cmd/stamgr` block-sta drops the client within
-seconds and keeps it from re-associating; unblock-sta lets it straight back on.
+seconds and normally keeps it from re-associating (see `hidden` for when it doesn't); unblock-sta lets
+it straight back on.
 """
 from dataclasses import dataclass
 
@@ -37,6 +38,10 @@ class UniFi:
             base_url=f"{host}/proxy/network/api/s/{site}",
             headers={"X-API-KEY": api_key, "Accept": "application/json"},
             verify=verify, timeout=15, transport=transport)
+        # Per AP name: stations the AP itself reports minus clients the controller lists on it, as of the
+        # last clients() call. The controller leaves blocked clients out of stat/sta, so a blocked device
+        # that got back on (seen right after a block, on the other AP) only shows up here.
+        self.hidden: dict[str, int] = {}
 
     async def close(self):
         await self._http.aclose()
@@ -59,6 +64,15 @@ class UniFi:
         aps = {d["mac"]: d.get("name") or d["mac"] for d in devices}
         known = await self._call("GET", "/rest/user")
         live = {s["mac"]: s for s in await self._call("GET", "/stat/sta")}
+        listed: dict[str, int] = {}
+        for s in live.values():
+            if s.get("ap_mac") and not s.get("is_wired"):
+                listed[s["ap_mac"]] = listed.get(s["ap_mac"], 0) + 1
+        self.hidden = {}
+        for d in devices:
+            n = sum(v.get("num_sta", 0) for v in d.get("vap_table") or []) - listed.get(d["mac"], 0)
+            if n > 0:
+                self.hidden[aps[d["mac"]]] = n
         out: dict[str, Client] = {}
         for u in known:
             mac = u["mac"].lower()

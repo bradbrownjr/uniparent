@@ -7,7 +7,8 @@ import pytest
 from uniparent.unifi import UniFi, UniFiError
 
 AP = "e0:00:00:00:00:01"
-DEVICES = [{"mac": AP, "name": "Living Room"}]
+DEVICES = [{"mac": AP, "name": "Living Room", "vap_table": [{"num_sta": 1}, {"num_sta": 1}]},
+           {"mac": "e0:00:00:00:00:02", "name": "Upstairs", "vap_table": [{"num_sta": 0}]}]
 USERS = [
     {"mac": "aa:00:00:00:00:01", "name": "Kitchen phone", "hostname": "Galaxy-A15", "oui": "Samsung", "last_ip": "192.0.2.10",
      "first_seen": 100, "last_seen": 200},
@@ -44,6 +45,7 @@ def test_clients_merge():
     assert phone.name == "Kitchen phone" and phone.hostname == "Galaxy-A15"  # UniFi name wins, hostname kept
     assert roku.online and roku.wired and plug.hostname == ""
     assert all(k == "KEY" for _, _, k, _ in seen)
+    assert u.hidden == {"Living Room": 1}  # the AP has the phone plus one the controller isn't listing
 
 
 def test_block_body():
